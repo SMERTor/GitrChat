@@ -1,3 +1,4 @@
+
 name: Build OneChat APK
 
 on:
@@ -8,18 +9,27 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
 
-      - uses: subosito/flutter-action@v2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
         with:
           channel: stable
 
-      - run: flutter pub get
+      - name: Create Android project
+        run: flutter create . --platforms=android
 
-      - run: flutter build apk --release
+      - name: Install dependencies
+        run: flutter pub get
 
-      - uses: actions/upload-artifact@v4
+      - name: Build APK
+        run: flutter build apk --release
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
         with:
           name: OneChat-APK
           path: build/app/outputs/flutter-apk/app-release.apk
