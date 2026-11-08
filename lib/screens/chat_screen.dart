@@ -1,418 +1,297 @@
-
 import 'dart:async';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
+import 'package:flutter_cache_manager/flutter_cache_manager.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:video_player/video_player.dart';
+
 import '../models/chat_message.dart';
 import '../services/chat_service.dart';
+import 'settings_screen.dart';
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key});
-
   @override
   State<ChatScreen> createState() => _ChatScreenState();
 }
 
 class _ChatScreenState extends State<ChatScreen> {
-  final service = ChatService();
-  final input = TextEditingController();
-  final scroll = ScrollController();
-
-  List<ChatMessage> messages = [];
-  bool loading = true;
-  bool sending = false;
-  bool someoneTyping = false;
-  bool typingSent = false;
-
-  RealtimeChannel? channel;
-  Timer? typingTimer;
-
-  final emojis = [
-    '😀', '😂', '😍', '🥰', '😎',
-    '😭', '😊', '❤️', '🔥', '👍',
-    '👋', '🎉', '😘', '🤔', '🙏',
-    '💯', '🤣', '😢', '😉', '🥳',
-  ];
+  final _text = TextEditingController();
+  final _scroll = ScrollController();
+  final _picker = ImagePicker();
+  late final SupabaseClient _client;
+  late final ChatService _service;
+  late final String _myId;
+  RealtimeChannel? _channel;
+  StreamSubscription<List<Map<String, dynamic>>>? _messageSub;
+  List<ChatMessage> _messages = [];
+  final Set<String> _typingUsers = {};
+  int _onlineCount = 1;
+  bool _loading = true, _sending = false;
+  Timer? _typingTimer;
+  bool _typingSent = false;
 
   @override
   void initState() {
     super.initState();
-    load();
-    setupRealtime();
+    _client = Supabase.instance.client;
+    _service = ChatService(_client);
+    _myId = _client.auth.currentUser!.id;
+    _start();
   }
 
-  void setupRealtime() {
-    channel = Supabase.instance.client.channel('onechat-presence');
+  Future<void> _start() async {
+    try {
+      _messages = await _service.loadMessages();
+      _subscribeMessages();
+      _subscribePresence();
+    } catch (_) {
+      if (mounted) _error('Не удалось загрузить сообщения. Проверьте подключение к Supabase.');
+    } finally {
+      if (mounted) setState(() => _loading = false);
+      _jumpToBottom();
+    }
+  }
 
-    channel!
-      .onPresenceSync((_) {
-        if (mounted) setState(() {});
-      })
-      .onBroadcast(
-        event: 'typing',
-        callback: (payload) {
-          final data = payload['payload'] is Map
-              ? Map<String, dynamic>.from(payload['payload'])
-              : Map<String, dynamic>.from(payload);
+  void _subscribeMessages() {
+    _messageSub = _client.from('messages').stream(primaryKey: ['id'])
+      .order('created_at').listen((_) async {
+        try {
+          final refreshed = await _service.loadMessages();
+          if (mounted) setState(() => _messages = refreshed);
+          _jumpToBottom();
+        } catch (_) {}
+      });
+  }
 
-          if (data['user_id'] == service.userId) return;
-
-          if (mounted) {
-            setState(() {
-              someoneTyping = data['typing'] == true;
-            });
-          }
-        },
-      )
-      .onPostgresChanges(
-        event: PostgresChangeEvent.all,
-        schema: 'public',
-        table: 'messages',
-        callback: (_) => load(),
-      )
-      .subscribe((status, error) async {
+  void _subscribePresence() {
+    final channel = _client.channel('public:onechat', opts: const RealtimeChannelConfig(self: true));
+    _channel = channel;
+    channel.onPresenceSync((_) { if (mounted) _refreshPresenceCount(); })
+      .onBroadcast(event: 'typing', callback: (payload) {
+        final id = payload['user_id']?.toString();
+        if (id == null || id == _myId || !mounted) return;
+        setState(() {
+          if (payload['is_typing'] == true) { _typingUsers.add(id); }
+          else { _typingUsers.remove(id); }
+        });
+      }).subscribe((status, error) async {
         if (status == RealtimeSubscribeStatus.subscribed) {
-          await channel!.track({
-            'user_id': service.userId,
-            'online_at': DateTime.now().toIso8601String(),
-          });
+          await channel.track({'user_id': _myId, 'online_at': DateTime.now().toIso8601String()});
+          _refreshPresenceCount();
         }
       });
   }
 
-  Future<void> sendTyping(bool value) async {
+  Future<void> _refreshPresenceCount() async {
+    final channel = _channel;
     if (channel == null) return;
+    final count = await _service.countOnlineUsers(channel);
+    if (mounted) setState(() => _onlineCount = count);
+  }
+
+  void _onTextChanged(String value) {
+    final channel = _channel;
+    if (channel == null) return;
+    if (value.trim().isNotEmpty && !_typingSent) {
+      _typingSent = true;
+      channel.sendBroadcastMessage(event: 'typing', payload: {'user_id': _myId, 'is_typing': true});
+    }
+    _typingTimer?.cancel();
+    _typingTimer = Timer(const Duration(seconds: 2), _stopTyping);
+  }
+
+  void _stopTyping() {
+    _typingTimer?.cancel();
+    if (_typingSent) {
+      _typingSent = false;
+      _channel?.sendBroadcastMessage(event: 'typing', payload: {'user_id': _myId, 'is_typing': false});
+    }
+  }
+
+  Future<void> _send() async {
+    if (_sending || _text.text.trim().isEmpty) return;
+    final value = _text.text;
+    _text.clear();
+    setState(() => _sending = true);
+    try { await _service.sendMessage(value); _stopTyping(); }
+    catch (_) { if (mounted) _error('Не удалось отправить сообщение.'); _text.text = value; }
+    finally { if (mounted) setState(() => _sending = false); }
+  }
+
+  Future<void> _pickImage() async {
     try {
-      await channel!.sendBroadcastMessage(
-        event: 'typing',
-        payload: {
-          'user_id': service.userId,
-          'typing': value,
-        },
-      );
-    } catch (_) {}
+      final picked = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 78, maxWidth: 1920);
+      if (picked != null) await _upload(File(picked.path), 'image');
+    } catch (_) { if (mounted) _error('Не удалось выбрать фотографию.'); }
   }
 
-  void onTyping(String value) {
-    if (value.trim().isEmpty) {
-      typingTimer?.cancel();
-      if (typingSent) {
-        typingSent = false;
-        sendTyping(false);
-      }
-      return;
-    }
-
-    if (!typingSent) {
-      typingSent = true;
-      sendTyping(true);
-    }
-
-    typingTimer?.cancel();
-    typingTimer = Timer(const Duration(seconds: 2), () {
-      typingSent = false;
-      sendTyping(false);
-    });
-  }
-
-  Future<void> load() async {
+  Future<void> _recordCircle() async {
     try {
-      final data = await service.loadMessages();
-      if (mounted) {
-        setState(() {
-          messages = data;
-          loading = false;
-        });
-      }
-    } catch (_) {
-      if (mounted) setState(() => loading = false);
+      final picked = await _picker.pickVideo(source: ImageSource.camera,
+        preferredCameraDevice: CameraDevice.front, maxDuration: const Duration(seconds: 60));
+      if (picked != null) await _upload(File(picked.path), 'video_circle');
+    } catch (_) { if (mounted) _error('Не удалось записать видеосообщение.'); }
+  }
+
+  Future<void> _upload(File file, String type, {int? duration}) async {
+    setState(() => _sending = true);
+    try { await _service.sendMedia(file, type, durationSeconds: duration); }
+    catch (e) { if (mounted) _error('Не удалось отправить медиа: $e'); }
+    finally { if (mounted) setState(() => _sending = false); }
+  }
+
+  Future<void> _emoji() async {
+    const emojis = ['😀','😁','😂','🤣','😊','😍','🥰','😘','😉','😎','😭','😅','🤔','👍','👎','❤️','🔥','🎉','🙏','🤝','👏','💯','🥹','😴'];
+    final selected = await showModalBottomSheet<String>(context: context, builder: (context) =>
+      SafeArea(child: Padding(padding: const EdgeInsets.all(16), child: Wrap(
+        spacing: 14, runSpacing: 14, children: emojis.map((e) => InkWell(
+          onTap: () => Navigator.pop(context, e), child: Text(e, style: const TextStyle(fontSize: 28))),
+        ).toList(),
+      ))));
+    if (selected != null) {
+      final old = _text.value;
+      final next = old.text.replaceRange(old.selection.start < 0 ? old.text.length : old.selection.start,
+        old.selection.end < 0 ? old.text.length : old.selection.end, selected);
+      _text.value = TextEditingValue(text: next, selection: TextSelection.collapsed(offset: next.length));
     }
   }
 
-  Future<void> send() async {
-    final value = input.text.trim();
-    if (value.isEmpty || sending) return;
-
-    setState(() => sending = true);
-    input.clear();
-
-    typingTimer?.cancel();
-    typingSent = false;
-    sendTyping(false);
-
-    try {
-      await service.send(value);
-      await load();
-    } catch (_) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Не удалось отправить сообщение')),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => sending = false);
-    }
+  Future<void> _delete(ChatMessage message) async {
+    if (message.userId != _myId) return;
+    final yes = await showDialog<bool>(context: context, builder: (context) => AlertDialog(
+      title: const Text('Удалить сообщение?'),
+      content: const Text('Оно будет удалено у обоих участников.'),
+      actions: [TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Отмена')),
+        FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Удалить'))],
+    ));
+    if (yes != true) return;
+    try { await _service.deleteMessage(message); }
+    catch (_) { if (mounted) _error('Не удалось удалить сообщение.'); }
   }
 
-  void addEmoji(String emoji) {
-    final text = input.text;
-    final selection = input.selection;
-    final start = selection.start < 0 ? text.length : selection.start;
-    final end = selection.end < 0 ? text.length : selection.end;
-
-    final newText = text.replaceRange(start, end, emoji);
-    input.value = TextEditingValue(
-      text: newText,
-      selection: TextSelection.collapsed(
-        offset: start + emoji.length,
-      ),
-    );
-    onTyping(newText);
-  }
-
-  Future<void> remove(ChatMessage message) async {
-    try {
-      await service.delete(message.id);
-      await load();
-    } catch (_) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Не удалось удалить сообщение')),
-        );
-      }
-    }
-  }
-
-  Color avatarColor(String name) {
-    final colors = [
-      Colors.indigo,
-      Colors.teal,
-      Colors.deepPurple,
-      Colors.blue,
-      Colors.pink,
-      Colors.orange,
-      Colors.green,
-    ];
-    return colors[name.hashCode.abs() % colors.length];
-  }
+  void _error(String text) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+  void _jumpToBottom() => WidgetsBinding.instance.addPostFrameCallback((_) {
+    if (_scroll.hasClients) _scroll.animateTo(_scroll.position.maxScrollExtent,
+      duration: const Duration(milliseconds: 250), curve: Curves.easeOut);
+  });
+  String _initials(String name) => name.trim().isEmpty ? '?' : name.trim()[0].toUpperCase();
+  String _time(DateTime date) => '${date.hour.toString().padLeft(2,'0')}:${date.minute.toString().padLeft(2,'0')}';
 
   @override
   void dispose() {
-    typingTimer?.cancel();
-    input.dispose();
-    scroll.dispose();
-
-    if (channel != null) {
-      channel!.untrack();
-      Supabase.instance.client.removeChannel(channel!);
-    }
-
-    super.dispose();
+    _typingTimer?.cancel(); _messageSub?.cancel();
+    final channel = _channel;
+    if (channel != null) _client.removeChannel(channel);
+    _text.dispose(); _scroll.dispose(); super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final currentId = service.userId;
-    final online = channel?.presenceState().length ?? 0;
-
+    final typing = _typingUsers.isNotEmpty;
     return Scaffold(
-      appBar: AppBar(
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'OneChat',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-            Text(
-              '$online в сети',
-              style: const TextStyle(
-                fontSize: 12,
-                color: Colors.green,
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          IconButton(
-            onPressed: load,
-            icon: const Icon(Icons.refresh),
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          Expanded(
-            child: loading
-                ? const Center(child: CircularProgressIndicator())
-                : messages.isEmpty
-                    ? const Center(
-                        child: Text('Пока нет сообщений. Начните разговор.'),
-                      )
-                    : ListView.builder(
-                        controller: scroll,
-                        padding: const EdgeInsets.all(16),
-                        itemCount: messages.length,
-                        itemBuilder: (_, i) {
-                          final message = messages[i];
-                          final mine = message.userId == currentId;
-
-                          return Align(
-                            alignment: mine
-                                ? Alignment.centerRight
-                                : Alignment.centerLeft,
-                            child: GestureDetector(
-                              onLongPress: mine
-                                  ? () => showModalBottomSheet(
-                                        context: context,
-                                        builder: (_) => ListTile(
-                                          leading: const Icon(
-                                            Icons.delete_outline,
-                                          ),
-                                          title: const Text(
-                                            'Удалить сообщение',
-                                          ),
-                                          onTap: () {
-                                            Navigator.pop(context);
-                                            remove(message);
-                                          },
-                                        ),
-                                      )
-                                  : null,
-                              child: Container(
-                                margin: const EdgeInsets.only(bottom: 10),
-                                padding: const EdgeInsets.all(12),
-                                constraints:
-                                    const BoxConstraints(maxWidth: 320),
-                                decoration: BoxDecoration(
-                                  color: mine
-                                      ? const Color(0xFFE2E7FF)
-                                      : Colors.white,
-                                  borderRadius: BorderRadius.circular(16),
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        CircleAvatar(
-                                          radius: 15,
-                                          backgroundColor:
-                                              avatarColor(message.name),
-                                          child: Text(
-                                            message.name.isNotEmpty
-                                                ? message.name[0].toUpperCase()
-                                                : '?',
-                                            style: const TextStyle(
-                                              color: Colors.white,
-                                              fontWeight: FontWeight.bold,
-                                            ),
-                                          ),
-                                        ),
-                                        const SizedBox(width: 7),
-                                        Flexible(
-                                          child: Text(
-                                            mine ? 'Вы' : message.name,
-                                            style: const TextStyle(
-                                              fontWeight: FontWeight.w600,
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    const SizedBox(height: 6),
-                                    Text(message.body),
-                                    const SizedBox(height: 4),
-                                    Align(
-                                      alignment: Alignment.bottomRight,
-                                      child: Text(
-                                        DateFormat('HH:mm')
-                                            .format(message.createdAt),
-                                        style: const TextStyle(
-                                          fontSize: 10,
-                                          color: Colors.black54,
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          );
-                        },
-                      ),
-          ),
-
-          if (someoneTyping)
-            const Padding(
-              padding: EdgeInsets.only(left: 18, bottom: 6),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  'Кто-то печатает…',
-                  style: TextStyle(
-                    color: Colors.grey,
-                    fontStyle: FontStyle.italic,
-                  ),
-                ),
-              ),
-            ),
-
-          SizedBox(
-            height: 42,
-            child: ListView(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 10),
-              children: emojis.map((emoji) {
-                return InkWell(
-                  onTap: () => addEmoji(emoji),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 7),
-                    child: Center(
-                      child: Text(
-                        emoji,
-                        style: const TextStyle(fontSize: 25),
-                      ),
-                    ),
-                  ),
-                );
-              }).toList(),
-            ),
-          ),
-
-          SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: input,
-                      minLines: 1,
-                      maxLines: 4,
-                      onChanged: onTyping,
-                      decoration: const InputDecoration(
-                        hintText: 'Сообщение…',
-                        contentPadding: EdgeInsets.symmetric(
-                          horizontal: 18,
-                          vertical: 12,
-                        ),
-                      ),
-                      onSubmitted: (_) => send(),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  IconButton.filled(
-                    onPressed: sending ? null : send,
-                    icon: const Icon(Icons.send_rounded),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
+      appBar: AppBar(titleSpacing: 4, title: Row(children: [
+        CircleAvatar(backgroundColor: Theme.of(context).colorScheme.primaryContainer,
+          child: Icon(Icons.forum_rounded, color: Theme.of(context).colorScheme.primary)),
+        const SizedBox(width: 10), Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('Общий чат', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+          Text('$_onlineCount онлайн', style: const TextStyle(fontSize: 12, color: Colors.green)),
+        ]),
+      ]), actions: [
+        IconButton(tooltip: 'Настройки', icon: const Icon(Icons.tune_rounded),
+          onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const SettingsScreen()))),
+        IconButton(tooltip: 'Выйти', onPressed: () => _client.auth.signOut(), icon: const Icon(Icons.logout_rounded)),
+      ]),
+      body: Column(children: [
+        Expanded(child: _loading ? const Center(child: CircularProgressIndicator()) :
+          _messages.isEmpty ? const Center(child: Text('Пока сообщений нет\nНачните общение первым', textAlign: TextAlign.center)) :
+          ListView.builder(controller: _scroll, padding: const EdgeInsets.fromLTRB(14,12,14,16),
+            itemCount: _messages.length, itemBuilder: (context, index) {
+              final m = _messages[index]; final mine = m.userId == _myId;
+              return GestureDetector(onLongPress: mine ? () => _delete(m) : null,
+                child: Padding(padding: const EdgeInsets.only(bottom: 10), child: Row(
+                  mainAxisAlignment: mine ? MainAxisAlignment.end : MainAxisAlignment.start,
+                  crossAxisAlignment: CrossAxisAlignment.end, children: [
+                    if (!mine) ...[CircleAvatar(radius: 16, child: Text(_initials(m.userName))), const SizedBox(width: 7)],
+                    Flexible(child: Container(constraints: const BoxConstraints(maxWidth: 300),
+                      padding: const EdgeInsets.all(10), decoration: BoxDecoration(
+                        color: mine ? Theme.of(context).colorScheme.primary : Theme.of(context).colorScheme.surfaceContainerHighest,
+                        borderRadius: BorderRadius.circular(17)),
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        if (!mine) Padding(padding: const EdgeInsets.only(bottom: 4), child: Text(m.userName,
+                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Theme.of(context).colorScheme.primary))),
+                        if (m.hasMedia) MediaBubble(message: m, service: _service),
+                        if (m.text.isNotEmpty) Text(m.text, style: TextStyle(color: mine ? Colors.white : null)),
+                        Align(alignment: Alignment.bottomRight, child: Text(_time(m.createdAt),
+                          style: TextStyle(fontSize: 10, color: mine ? Colors.white70 : Theme.of(context).hintColor))),
+                      ]))),
+                  ],
+                )));
+            })),
+        if (typing) const Padding(padding: EdgeInsets.fromLTRB(18,0,18,8), child: Align(
+          alignment: Alignment.centerLeft, child: Text('Собеседник печатает…', style: TextStyle(fontSize: 12)))),
+        SafeArea(top: false, child: Padding(padding: const EdgeInsets.fromLTRB(8,6,8,10), child: Row(children: [
+          IconButton(tooltip: 'Смайлики', onPressed: _emoji, icon: const Icon(Icons.emoji_emotions_outlined)),
+          IconButton(tooltip: 'Фото', onPressed: _sending ? null : _pickImage, icon: const Icon(Icons.image_outlined)),
+          IconButton(tooltip: 'Видеокружок', onPressed: _sending ? null : _recordCircle, icon: const Icon(Icons.video_camera_front_outlined)),
+          Expanded(child: TextField(controller: _text, minLines: 1, maxLines: 4,
+            textCapitalization: TextCapitalization.sentences, onChanged: _onTextChanged,
+            onSubmitted: (_) => _send(), decoration: const InputDecoration(hintText: 'Сообщение…'))),
+          const SizedBox(width: 6), IconButton.filled(onPressed: _sending ? null : _send,
+            icon: _sending ? const SizedBox(width:18,height:18,child:CircularProgressIndicator(strokeWidth:2)) : const Icon(Icons.send_rounded)),
+        ]))),
+      ]),
     );
   }
+}
+
+class MediaBubble extends StatelessWidget {
+  const MediaBubble({super.key, required this.message, required this.service});
+  final ChatMessage message;
+  final ChatService service;
+
+  @override
+  Widget build(BuildContext context) => FutureBuilder<String>(
+    future: service.mediaUrl(message.mediaPath!),
+    builder: (context, snapshot) {
+      if (!snapshot.hasData) return const SizedBox(width: 190,height:130,child:Center(child:CircularProgressIndicator()));
+      return FutureBuilder<File>(
+        future: DefaultCacheManager().getSingleFile(snapshot.data!),
+        builder: (context, file) {
+          if (!file.hasData) return const SizedBox(width:190,height:130,child:Center(child:CircularProgressIndicator()));
+          if (message.mediaType == 'image') return GestureDetector(
+            onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => Scaffold(
+              appBar: AppBar(), body: Center(child: InteractiveViewer(child: Image.file(file.data!, fit: BoxFit.contain))))),
+            child: ClipRRect(borderRadius: BorderRadius.circular(12), child: Image.file(file.data!, width: 220, fit: BoxFit.cover)));
+          return VideoCircle(file: file.data!, duration: message.mediaDurationSeconds ?? 0);
+        },
+      );
+    },
+  );
+}
+
+class VideoCircle extends StatefulWidget {
+  const VideoCircle({super.key, required this.file, required this.duration});
+  final File file; final int duration;
+  @override
+  State<VideoCircle> createState() => _VideoCircleState();
+}
+class _VideoCircleState extends State<VideoCircle> {
+  late final VideoPlayerController _controller;
+  @override
+  void initState() { super.initState(); _controller = VideoPlayerController.file(widget.file)
+    ..initialize().then((_) { if (mounted) setState(() {}); }); }
+  @override
+  void dispose() { _controller.dispose(); super.dispose(); }
+  @override
+  Widget build(BuildContext context) => GestureDetector(onTap: () {
+    if (_controller.value.isPlaying) _controller.pause(); else _controller.play();
+    setState(() {});
+  }, child: ClipOval(child: SizedBox(width: 190,height:190, child: _controller.value.isInitialized
+    ? Stack(fit: StackFit.expand, children: [FittedBox(fit: BoxFit.cover, child: SizedBox(
+      width: _controller.value.size.width, height: _controller.value.size.height, child: VideoPlayer(_controller))),
+      if (!_controller.value.isPlaying) const Center(child: Icon(Icons.play_circle_fill, size: 54, color: Colors.white))])
+    : const ColoredBox(color: Colors.black12, child: Center(child: CircularProgressIndicator())))));
 }
