@@ -19,7 +19,7 @@ class _NameScreenState extends State<NameScreen> {
       await ChatService().signIn(name);
       if (!mounted) return;
       Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const ChatScreen()));
-    } catch (e) { setState(() => error = 'Не удалось войти. Проверьте подключение и настройки Supabase.'); }
+    } catch (e) { setState(() => error = 'Ошибка: $e'); }
     finally { if (mounted) setState(() => busy = false); }
   }
   @override
