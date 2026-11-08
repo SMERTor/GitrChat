@@ -261,10 +261,28 @@ class MediaBubble extends StatelessWidget {
         future: DefaultCacheManager().getSingleFile(snapshot.data!),
         builder: (context, file) {
           if (!file.hasData) return const SizedBox(width:190,height:130,child:Center(child:CircularProgressIndicator()));
-          if (message.mediaType == 'image') return GestureDetector(
-            onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => Scaffold(
-              appBar: AppBar(), body: Center(child: InteractiveViewer(child: Image.file(file.data!, fit: BoxFit.contain))))),
-            child: ClipRRect(borderRadius: BorderRadius.circular(12), child: Image.file(file.data!, width: 220, fit: BoxFit.cover)));
+          if (message.mediaType == 'image') {
+            return GestureDetector(
+              onTap: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => Scaffold(
+                      appBar: AppBar(),
+                      body: Center(
+                        child: InteractiveViewer(
+                          child: Image.file(file.data!, fit: BoxFit.contain),
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              },
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: Image.file(file.data!, width: 220, fit: BoxFit.cover),
+              ),
+            );
+          }
           return VideoCircle(file: file.data!, duration: message.mediaDurationSeconds ?? 0);
         },
       );
