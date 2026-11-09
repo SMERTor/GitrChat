@@ -31,26 +31,60 @@ class OneChatApp extends StatelessWidget {
   const OneChatApp({super.key});
 
   ThemeData _theme(Brightness brightness) {
+    const accent = Color(0xFF11F3A6);
+    final dark = brightness == Brightness.dark;
     final scheme = ColorScheme.fromSeed(
-      seedColor: const Color(0xFF6558D3), brightness: brightness);
+      seedColor: accent,
+      brightness: brightness,
+      primary: accent,
+      onPrimary: const Color(0xFF04251B),
+      secondary: const Color(0xFF73FFD0),
+      surface: dark ? const Color(0xFF111A1B) : Colors.white,
+    );
     return ThemeData(
       useMaterial3: true,
       colorScheme: scheme,
-      scaffoldBackgroundColor: brightness == Brightness.light
-          ? const Color(0xFFF7F7FB) : const Color(0xFF101116),
+      scaffoldBackgroundColor: dark ? const Color(0xFF071110) : const Color(0xFFF2FAF7),
       appBarTheme: AppBarTheme(
-        backgroundColor: brightness == Brightness.light
-            ? const Color(0xFFF7F7FB) : const Color(0xFF101116),
+        backgroundColor: dark ? const Color(0xFF071110) : const Color(0xFFF2FAF7),
+        foregroundColor: dark ? const Color(0xFFE9FFF7) : const Color(0xFF10231D),
         surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        centerTitle: false,
+        titleTextStyle: TextStyle(
+          color: dark ? const Color(0xFFE9FFF7) : const Color(0xFF10231D),
+          fontSize: 20, fontWeight: FontWeight.w800, letterSpacing: -0.4,
+        ),
+      ),
+      cardTheme: CardThemeData(
+        color: dark ? const Color(0xFF111E1B) : Colors.white,
+        elevation: 0,
+        margin: EdgeInsets.zero,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
-        fillColor: brightness == Brightness.light
-            ? Colors.white : const Color(0xFF20212A),
+        fillColor: dark ? const Color(0xFF14211D) : Colors.white,
+        hintStyle: TextStyle(color: dark ? const Color(0xFF8BA49A) : const Color(0xFF80948B)),
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(18), borderSide: BorderSide.none),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          borderRadius: BorderRadius.circular(24), borderSide: BorderSide.none),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(24), borderSide: BorderSide.none),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(24),
+          borderSide: const BorderSide(color: accent, width: 1.4)),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 15),
       ),
+      filledButtonTheme: FilledButtonThemeData(
+        style: FilledButton.styleFrom(
+          backgroundColor: accent,
+          foregroundColor: const Color(0xFF04251B),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+          textStyle: const TextStyle(fontWeight: FontWeight.w800),
+        ),
+      ),
+      dividerTheme: DividerThemeData(
+        color: dark ? Colors.white.withOpacity(.07) : const Color(0xFFE2EEE8)),
     );
   }
 

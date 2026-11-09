@@ -251,11 +251,10 @@ class _ChatScreenState extends State<ChatScreen> {
     final typing = _typingUsers.isNotEmpty;
     return Scaffold(
       appBar: AppBar(titleSpacing: 4, title: Row(children: [
-        CircleAvatar(backgroundColor: Theme.of(context).colorScheme.primaryContainer,
-          child: Icon(Icons.forum_rounded, color: Theme.of(context).colorScheme.primary)),
+        CircleAvatar(backgroundColor: const Color(0xFF11F3A6), child: const Icon(Icons.forum_rounded, color: Color(0xFF04251B))),
         const SizedBox(width: 10), Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           const Text('GitrChat', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
-          Text('$_onlineCount онлайн', style: const TextStyle(fontSize: 12, color: Colors.green)),
+          Row(children: [Container(width: 7, height: 7, decoration: const BoxDecoration(color: Color(0xFF11F3A6), shape: BoxShape.circle)), const SizedBox(width: 6), Text('$_onlineCount онлайн', style: const TextStyle(fontSize: 12, color: Color(0xFF11B982)))]),
         ]),
       ]), actions: [
         IconButton(tooltip: 'Настройки', icon: const Icon(Icons.tune_rounded),
@@ -272,18 +271,28 @@ class _ChatScreenState extends State<ChatScreen> {
                 child: Padding(padding: const EdgeInsets.only(bottom: 10), child: Row(
                   mainAxisAlignment: mine ? MainAxisAlignment.end : MainAxisAlignment.start,
                   crossAxisAlignment: CrossAxisAlignment.end, children: [
-                    if (!mine) ...[CircleAvatar(radius: 16, child: Text(_initials(m.userName))), const SizedBox(width: 7)],
+                    if (!mine) ...[CircleAvatar(radius: 16, backgroundColor: const Color(0xFF11F3A6).withOpacity(.16), foregroundColor: const Color(0xFF11A879), child: Text(_initials(m.userName), style: const TextStyle(fontWeight: FontWeight.w800))), const SizedBox(width: 7)],
                     Flexible(child: Container(constraints: const BoxConstraints(maxWidth: 300),
                       padding: const EdgeInsets.all(10), decoration: BoxDecoration(
-                        color: mine ? Theme.of(context).colorScheme.primary : Theme.of(context).colorScheme.surfaceContainerHighest,
-                        borderRadius: BorderRadius.only(topLeft: const Radius.circular(20), topRight: const Radius.circular(20), bottomLeft: Radius.circular(mine ? 20 : 6), bottomRight: Radius.circular(mine ? 6 : 20))),
+                        gradient: mine ? const LinearGradient(
+                          begin: Alignment.topLeft, end: Alignment.bottomRight,
+                          colors: [Color(0xFF11F3A6), Color(0xFF78FFD2)])
+                          : null,
+                        color: mine ? null : Theme.of(context).colorScheme.surface,
+                        border: mine ? null : Border.all(
+                          color: Theme.of(context).brightness == Brightness.dark
+                            ? Colors.white.withOpacity(.055) : const Color(0xFFE0EEE8)),
+                        boxShadow: mine ? [BoxShadow(
+                          color: const Color(0xFF11F3A6).withOpacity(.13),
+                          blurRadius: 18, offset: const Offset(0, 6))] : null,
+                        borderRadius: BorderRadius.only(topLeft: const Radius.circular(22), topRight: const Radius.circular(22), bottomLeft: Radius.circular(mine ? 22 : 7), bottomRight: Radius.circular(mine ? 7 : 22))),
                       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                         if (!mine) Padding(padding: const EdgeInsets.only(bottom: 4), child: Text(m.userName,
                           style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Theme.of(context).colorScheme.primary))),
                         if (m.hasMedia) MediaBubble(message: m, service: _service),
-                        if (m.text.isNotEmpty) Text(m.text, style: TextStyle(color: mine ? Colors.white : null)),
+                        if (m.text.isNotEmpty) Text(m.text, style: TextStyle(color: mine ? const Color(0xFF04251B) : null, fontWeight: mine ? FontWeight.w500 : FontWeight.normal)),
                         Align(alignment: Alignment.bottomRight, child: Text(_time(m.createdAt),
-                          style: TextStyle(fontSize: 10, color: mine ? Colors.white70 : Theme.of(context).hintColor))),
+                          style: TextStyle(fontSize: 10, color: mine ? const Color(0xFF1D6C51) : Theme.of(context).hintColor))),
                       ]))),
                   ],
                 )));
@@ -310,16 +319,42 @@ class _ChatScreenState extends State<ChatScreen> {
               )
             : const SizedBox(key: ValueKey('media-idle'), height: 0),
         ),
-        SafeArea(top: false, child: Padding(padding: const EdgeInsets.fromLTRB(10,8,10,12), child: Row(children: [
-          IconButton(tooltip: 'Смайлики', onPressed: _emoji, icon: const Icon(Icons.emoji_emotions_outlined)),
-          IconButton(tooltip: 'Фото', onPressed: _sending ? null : _pickImage, icon: const Icon(Icons.image_outlined)),
-          IconButton(tooltip: 'Видеокружок', onPressed: _sending ? null : _recordCircle, icon: const Icon(Icons.video_camera_front_outlined)),
-          Expanded(child: TextField(controller: _text, minLines: 1, maxLines: 4,
-            textCapitalization: TextCapitalization.sentences, onChanged: _onTextChanged,
-            onSubmitted: (_) => _send(), decoration: const InputDecoration(hintText: 'Сообщение…'))),
-          const SizedBox(width: 6), IconButton.filled(onPressed: _sending ? null : _send,
-            icon: _sending ? const SizedBox(width:18,height:18,child:CircularProgressIndicator(strokeWidth:2)) : const Icon(Icons.send_rounded)),
-        ]))),
+        SafeArea(top: false, child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surface,
+              borderRadius: BorderRadius.circular(30),
+              border: Border.all(color: Theme.of(context).brightness == Brightness.dark
+                ? Colors.white.withOpacity(.06) : const Color(0xFFE0EEE8)),
+              boxShadow: [BoxShadow(color: Colors.black.withOpacity(
+                Theme.of(context).brightness == Brightness.dark ? .12 : .04),
+                blurRadius: 20, offset: const Offset(0, 5))],
+            ),
+            child: Row(children: [
+              IconButton(tooltip: 'Смайлики', onPressed: _emoji,
+                color: const Color(0xFF11B982), icon: const Icon(Icons.sentiment_satisfied_alt_rounded)),
+              IconButton(tooltip: 'Фото', onPressed: _sending ? null : _pickImage,
+                color: const Color(0xFF11B982), icon: const Icon(Icons.image_rounded)),
+              IconButton(tooltip: 'Видеокружок', onPressed: _sending ? null : _recordCircle,
+                color: const Color(0xFF11B982), icon: const Icon(Icons.video_camera_front_rounded)),
+              Expanded(child: TextField(controller: _text, minLines: 1, maxLines: 4,
+                textCapitalization: TextCapitalization.sentences, onChanged: _onTextChanged,
+                onSubmitted: (_) => _send(), decoration: const InputDecoration(
+                  hintText: 'Написать сообщение…', filled: false, border: InputBorder.none,
+                  enabledBorder: InputBorder.none, focusedBorder: InputBorder.none,
+                  contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 10)))),
+              const SizedBox(width: 4),
+              Container(
+                decoration: const BoxDecoration(color: Color(0xFF11F3A6), shape: BoxShape.circle),
+                child: IconButton(onPressed: _sending ? null : _send,
+                  color: const Color(0xFF04251B),
+                  icon: _sending ? const SizedBox(width:18,height:18,child:CircularProgressIndicator(strokeWidth:2,color:Color(0xFF04251B))) : const Icon(Icons.arrow_upward_rounded)),
+              ),
+            ]),
+          ),
+        )),
       ]),
     );
   }
@@ -362,26 +397,316 @@ class MediaBubble extends StatelessWidget {
   );
 }
 
-class VideoCircle extends StatefulWidget {
+class VideoCircle extends StatelessWidget {
   const VideoCircle({super.key, required this.file, required this.duration});
-  final File file; final int duration;
+  final File file;
+  final int duration;
+
   @override
-  State<VideoCircle> createState() => _VideoCircleState();
+  Widget build(BuildContext context) => GestureDetector(
+        onTap: () {
+          Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) => CircleVideoViewer(
+                file: file,
+                duration: duration,
+              ),
+            ),
+          );
+        },
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            ClipOval(
+              child: SizedBox(
+                width: 190,
+                height: 190,
+                child: VideoPlayerPreview(file: file),
+              ),
+            ),
+            Container(
+              width: 54,
+              height: 54,
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(.48),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.play_arrow_rounded,
+                color: Colors.white,
+                size: 38,
+              ),
+            ),
+            if (duration > 0)
+              Positioned(
+                bottom: 12,
+                right: 18,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(.55),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 9,
+                      vertical: 4,
+                    ),
+                    child: Text(
+                      '${duration ~/ 60}:${(duration % 60).toString().padLeft(2, '0')}',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      );
 }
-class _VideoCircleState extends State<VideoCircle> {
+
+/// A lightweight muted preview; tapping the circle opens the large viewer.
+class VideoPlayerPreview extends StatefulWidget {
+  const VideoPlayerPreview({super.key, required this.file});
+  final File file;
+
+  @override
+  State<VideoPlayerPreview> createState() => _VideoPlayerPreviewState();
+}
+
+class _VideoPlayerPreviewState extends State<VideoPlayerPreview> {
   late final VideoPlayerController _controller;
+
   @override
-  void initState() { super.initState(); _controller = VideoPlayerController.file(widget.file)
-    ..initialize().then((_) { if (mounted) setState(() {}); }); }
+  void initState() {
+    super.initState();
+    _controller = VideoPlayerController.file(widget.file)
+      ..initialize().then((_) {
+        if (mounted) setState(() {});
+      });
+  }
+
   @override
-  void dispose() { _controller.dispose(); super.dispose(); }
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
   @override
-  Widget build(BuildContext context) => GestureDetector(onTap: () {
-    if (_controller.value.isPlaying) _controller.pause(); else _controller.play();
-    setState(() {});
-  }, child: ClipOval(child: SizedBox(width: 190,height:190, child: _controller.value.isInitialized
-    ? Stack(fit: StackFit.expand, children: [FittedBox(fit: BoxFit.cover, child: SizedBox(
-      width: _controller.value.size.width, height: _controller.value.size.height, child: VideoPlayer(_controller))),
-      if (!_controller.value.isPlaying) const Center(child: Icon(Icons.play_circle_fill, size: 54, color: Colors.white))])
-    : const ColoredBox(color: Colors.black12, child: Center(child: CircularProgressIndicator())))));
+  Widget build(BuildContext context) {
+    if (!_controller.value.isInitialized) {
+      return const ColoredBox(
+        color: Color(0xFF17231F),
+        child: Center(
+          child: CircularProgressIndicator(color: Color(0xFF11F3A6)),
+        ),
+      );
+    }
+    return FittedBox(
+      fit: BoxFit.cover,
+      child: SizedBox(
+        width: _controller.value.size.width,
+        height: _controller.value.size.height,
+        child: VideoPlayer(_controller),
+      ),
+    );
+  }
+}
+
+class CircleVideoViewer extends StatefulWidget {
+  const CircleVideoViewer({
+    super.key,
+    required this.file,
+    required this.duration,
+  });
+
+  final File file;
+  final int duration;
+
+  @override
+  State<CircleVideoViewer> createState() => _CircleVideoViewerState();
+}
+
+class _CircleVideoViewerState extends State<CircleVideoViewer> {
+  late final VideoPlayerController _controller;
+  bool _showControls = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = VideoPlayerController.file(widget.file)
+      ..initialize().then((_) {
+        if (!mounted) return;
+        setState(() {});
+        _controller.play();
+      });
+    _controller.addListener(_onVideoChanged);
+  }
+
+  void _onVideoChanged() {
+    if (mounted) setState(() {});
+  }
+
+  void _togglePlayback() {
+    if (!_controller.value.isInitialized) return;
+    if (_controller.value.isPlaying) {
+      _controller.pause();
+    } else {
+      if (_controller.value.position >= _controller.value.duration) {
+        _controller.seekTo(Duration.zero);
+      }
+      _controller.play();
+    }
+    setState(() => _showControls = true);
+  }
+
+  String _time(Duration value) {
+    final minutes = value.inMinutes;
+    final seconds = value.inSeconds % 60;
+    return '$minutes:${seconds.toString().padLeft(2, '0')}';
+  }
+
+  @override
+  void dispose() {
+    _controller.removeListener(_onVideoChanged);
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final initialized = _controller.value.isInitialized;
+    final screen = MediaQuery.sizeOf(context);
+    final diameter = (screen.width * .88).clamp(240.0, 420.0);
+
+    return Scaffold(
+      backgroundColor: const Color(0xFF050B09),
+      appBar: AppBar(
+        backgroundColor: const Color(0xFF050B09),
+        foregroundColor: Colors.white,
+        title: const Text('Видеокружок'),
+        actions: [
+          IconButton(
+            tooltip: 'Закрыть',
+            onPressed: () => Navigator.of(context).pop(),
+            icon: const Icon(Icons.close_rounded),
+          ),
+        ],
+      ),
+      body: SafeArea(
+        child: Center(
+          child: initialized
+              ? Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    GestureDetector(
+                      onTap: () {
+                        setState(() => _showControls = !_showControls);
+                        if (_showControls && !_controller.value.isPlaying) {
+                          _togglePlayback();
+                        }
+                      },
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 220),
+                        width: diameter,
+                        height: diameter,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: const Color(0xFF11F3A6),
+                            width: 3,
+                          ),
+                          boxShadow: [
+                            BoxShadow(
+                              color: const Color(0xFF11F3A6).withOpacity(.18),
+                              blurRadius: 28,
+                              spreadRadius: 2,
+                            ),
+                          ],
+                        ),
+                        child: ClipOval(
+                          child: Stack(
+                            fit: StackFit.expand,
+                            children: [
+                              FittedBox(
+                                fit: BoxFit.cover,
+                                child: SizedBox(
+                                  width: _controller.value.size.width,
+                                  height: _controller.value.size.height,
+                                  child: VideoPlayer(_controller),
+                                ),
+                              ),
+                              if (_showControls &&
+                                  !_controller.value.isPlaying)
+                                Container(
+                                  color: Colors.black.withOpacity(.20),
+                                  child: const Center(
+                                    child: Icon(
+                                      Icons.play_circle_fill_rounded,
+                                      color: Colors.white,
+                                      size: 76,
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 28),
+                    SizedBox(
+                      width: diameter,
+                      child: Row(
+                        children: [
+                          Text(
+                            _time(_controller.value.position),
+                            style: const TextStyle(color: Colors.white70),
+                          ),
+                          Expanded(
+                            child: VideoProgressIndicator(
+                              _controller,
+                              allowScrubbing: true,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                              ),
+                              colors: const VideoProgressColors(
+                                playedColor: Color(0xFF11F3A6),
+                                bufferedColor: Colors.white30,
+                                backgroundColor: Colors.white12,
+                              ),
+                            ),
+                          ),
+                          Text(
+                            _time(_controller.value.duration),
+                            style: const TextStyle(color: Colors.white70),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 18),
+                    IconButton.filled(
+                      style: IconButton.styleFrom(
+                        backgroundColor: const Color(0xFF11F3A6),
+                        foregroundColor: const Color(0xFF04251B),
+                        minimumSize: const Size(64, 64),
+                      ),
+                      onPressed: _togglePlayback,
+                      icon: Icon(
+                        _controller.value.isPlaying
+                            ? Icons.pause_rounded
+                            : Icons.play_arrow_rounded,
+                        size: 34,
+                      ),
+                    ),
+                  ],
+                )
+              : const CircularProgressIndicator(
+                  color: Color(0xFF11F3A6),
+                ),
+        ),
+      ),
+    );
+  }
 }
