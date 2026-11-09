@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:uuid/uuid.dart';
 
@@ -25,10 +26,11 @@ class ChatService {
     return row?['name'] as String? ?? 'Пользователь';
   }
 
-  Future<List<ChatMessage>> loadMessages() async {
-    final rows = await client.from('messages')
-      .select('id,user_id,body,created_at,media_path,media_type,media_duration_seconds,profiles(name)')
-      .order('created_at', ascending: true).limit(100);
+  Future<List<ChatMessage>> loadMessages({DateTime? after}) async {
+    var query = client.from('messages')
+      .select('id,user_id,body,created_at,media_path,media_type,media_duration_seconds,profiles(name)');
+    if (after != null) query = query.gt('created_at', after.toUtc().toIso8601String());
+    final rows = await query.order('created_at', ascending: true).limit(200);
     return rows.map((row) => ChatMessage.fromMap(row)).toList();
   }
 
@@ -59,6 +61,15 @@ class ChatService {
   }
 
   Future<String> mediaUrl(String path) => client.storage.from(bucket).createSignedUrl(path, 60 * 60 * 24 * 7);
+
+  Future<File> cachedMediaFile(String path) async {
+    final key = 'gitrchat-media-$path';
+    final cache = DefaultCacheManager();
+    final cached = await cache.getFileFromCache(key);
+    if (cached != null && await cached.file.exists()) return cached.file;
+    final url = await mediaUrl(path);
+    return cache.getSingleFile(url, key: key);
+  }
 
   Future<void> deleteMessage(ChatMessage message) async {
     if (message.userId != userId) throw Exception('Можно удалять только свои сообщения');

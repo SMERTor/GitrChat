@@ -1,11 +1,14 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:convert';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:video_player/video_player.dart';
+import 'package:video_compress/video_compress.dart';
 
 import '../models/chat_message.dart';
 import '../services/chat_service.dart';
@@ -42,13 +45,49 @@ class _ChatScreenState extends State<ChatScreen> {
     _start();
   }
 
+  String get _cacheKey => 'gitrchat_messages_$_myId';
+
+  Future<void> _saveLocalMessages() async {
+    final prefs = await SharedPreferences.getInstance();
+    final recent = _messages.length > 1000 ? _messages.sublist(_messages.length - 1000) : _messages;
+    await prefs.setString(_cacheKey, jsonEncode(recent.map((m) => m.toCacheMap()).toList()));
+  }
+
+  Future<void> _syncNewMessages() async {
+    try {
+      final last = _messages.isEmpty ? null : _messages.last.createdAt;
+      final incoming = await _service.loadMessages(after: last);
+      if (incoming.isEmpty) return;
+      final ids = _messages.map((m) => m.id).toSet();
+      final fresh = incoming.where((m) => !ids.contains(m.id)).toList();
+      if (fresh.isEmpty) return;
+      if (mounted) setState(() => _messages = [..._messages, ...fresh]);
+      await _saveLocalMessages();
+      _jumpToBottom();
+    } catch (_) { /* cached messages remain available offline */ }
+  }
+
   Future<void> _start() async {
     try {
-      _messages = await _service.loadMessages();
+      final prefs = await SharedPreferences.getInstance();
+      final saved = prefs.getString(_cacheKey);
+      if (saved != null) {
+        final decoded = (jsonDecode(saved) as List).cast<Map<String, dynamic>>();
+        _messages = decoded.map(ChatMessage.fromCacheMap).toList();
+        if (mounted) setState(() {});
+      }
+      // Only the first run downloads history. Later runs request rows newer than
+      // the newest locally cached message, never the already cached history.
+      await _syncNewMessages();
+      if (_messages.isEmpty) {
+        final initial = await _service.loadMessages();
+        if (mounted) setState(() => _messages = initial);
+        await _saveLocalMessages();
+      }
       _subscribeMessages();
       _subscribePresence();
     } catch (_) {
-      if (mounted) _error('Не удалось загрузить сообщения. Проверьте подключение к Supabase.');
+      if (mounted && _messages.isEmpty) _error('Нет подключения. Локальная история появится после первой синхронизации.');
     } finally {
       if (mounted) setState(() => _loading = false);
       _jumpToBottom();
@@ -57,13 +96,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   void _subscribeMessages() {
     _messageSub = _client.from('messages').stream(primaryKey: ['id'])
-      .order('created_at').listen((_) async {
-        try {
-          final refreshed = await _service.loadMessages();
-          if (mounted) setState(() => _messages = refreshed);
-          _jumpToBottom();
-        } catch (_) {}
-      });
+      .listen((_) => _syncNewMessages());
   }
 
   void _subscribePresence() {
@@ -123,7 +156,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _pickImage() async {
     try {
-      final picked = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 78, maxWidth: 1920);
+      final picked = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 68, maxWidth: 1600, maxHeight: 1600);
       if (picked != null) await _upload(File(picked.path), 'image');
     } catch (_) { if (mounted) _error('Не удалось выбрать фотографию.'); }
   }
@@ -137,10 +170,33 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _upload(File file, String type, {int? duration}) async {
-    setState(() => _sending = true);
-    try { await _service.sendMedia(file, type, durationSeconds: duration); }
-    catch (e) { if (mounted) _error('Не удалось отправить медиа: $e'); }
-    finally { if (mounted) setState(() => _sending = false); }
+    if (mounted) setState(() => _sending = true);
+    File uploadFile = file;
+    String? compressedPath;
+    try {
+      // ImagePicker has already produced a resized JPEG for photos.
+      // Re-encode video to a mobile-friendly 720p profile before upload.
+      if (type == 'video_circle') {
+        final info = await VideoCompress.compressVideo(
+          file.path,
+          quality: VideoQuality.MediumQuality,
+          deleteOrigin: false,
+          includeAudio: true,
+        );
+        if (info?.file != null) {
+          uploadFile = info!.file!;
+          compressedPath = uploadFile.path;
+        }
+      }
+      await _service.sendMedia(uploadFile, type, durationSeconds: duration);
+    } catch (e) {
+      if (mounted) _error('Не удалось сжать или отправить медиа: $e');
+    } finally {
+      if (compressedPath != null) {
+        try { await VideoCompress.deleteAllCache(); } catch (_) {}
+      }
+      if (mounted) setState(() => _sending = false);
+    }
   }
 
   Future<void> _emoji() async {
@@ -168,8 +224,10 @@ class _ChatScreenState extends State<ChatScreen> {
         FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Удалить'))],
     ));
     if (yes != true) return;
-    try { await _service.deleteMessage(message); }
-    catch (_) { if (mounted) _error('Не удалось удалить сообщение.'); }
+    try { await _service.deleteMessage(message);
+      if (mounted) setState(() => _messages.removeWhere((m) => m.id == message.id));
+      await _saveLocalMessages();
+    } catch (_) { if (mounted) _error('Не удалось удалить сообщение.'); }
   }
 
   void _error(String text) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
@@ -196,7 +254,7 @@ class _ChatScreenState extends State<ChatScreen> {
         CircleAvatar(backgroundColor: Theme.of(context).colorScheme.primaryContainer,
           child: Icon(Icons.forum_rounded, color: Theme.of(context).colorScheme.primary)),
         const SizedBox(width: 10), Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Text('Общий чат', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+          const Text('GitrChat', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
           Text('$_onlineCount онлайн', style: const TextStyle(fontSize: 12, color: Colors.green)),
         ]),
       ]), actions: [
@@ -207,7 +265,7 @@ class _ChatScreenState extends State<ChatScreen> {
       body: Column(children: [
         Expanded(child: _loading ? const Center(child: CircularProgressIndicator()) :
           _messages.isEmpty ? const Center(child: Text('Пока сообщений нет\nНачните общение первым', textAlign: TextAlign.center)) :
-          ListView.builder(controller: _scroll, padding: const EdgeInsets.fromLTRB(14,12,14,16),
+          ListView.builder(controller: _scroll, padding: const EdgeInsets.fromLTRB(16,16,16,20),
             itemCount: _messages.length, itemBuilder: (context, index) {
               final m = _messages[index]; final mine = m.userId == _myId;
               return GestureDetector(onLongPress: mine ? () => _delete(m) : null,
@@ -218,7 +276,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     Flexible(child: Container(constraints: const BoxConstraints(maxWidth: 300),
                       padding: const EdgeInsets.all(10), decoration: BoxDecoration(
                         color: mine ? Theme.of(context).colorScheme.primary : Theme.of(context).colorScheme.surfaceContainerHighest,
-                        borderRadius: BorderRadius.circular(17)),
+                        borderRadius: BorderRadius.only(topLeft: const Radius.circular(20), topRight: const Radius.circular(20), bottomLeft: Radius.circular(mine ? 20 : 6), bottomRight: Radius.circular(mine ? 6 : 20))),
                       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                         if (!mine) Padding(padding: const EdgeInsets.only(bottom: 4), child: Text(m.userName,
                           style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Theme.of(context).colorScheme.primary))),
@@ -232,7 +290,27 @@ class _ChatScreenState extends State<ChatScreen> {
             })),
         if (typing) const Padding(padding: EdgeInsets.fromLTRB(18,0,18,8), child: Align(
           alignment: Alignment.centerLeft, child: Text('Собеседник печатает…', style: TextStyle(fontSize: 12)))),
-        SafeArea(top: false, child: Padding(padding: const EdgeInsets.fromLTRB(8,6,8,10), child: Row(children: [
+        AnimatedSwitcher(
+          duration: const Duration(milliseconds: 260),
+          switchInCurve: Curves.easeOutCubic,
+          switchOutCurve: Curves.easeInCubic,
+          child: _sending
+            ? Padding(
+                key: const ValueKey('media-uploading'),
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 2),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Row(children: [
+                    const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
+                    const SizedBox(width: 9),
+                    Text('Сжимаем и отправляем…', style: Theme.of(context).textTheme.labelMedium),
+                  ]),
+                  const SizedBox(height: 7),
+                  const LinearProgressIndicator(minHeight: 3),
+                ]),
+              )
+            : const SizedBox(key: ValueKey('media-idle'), height: 0),
+        ),
+        SafeArea(top: false, child: Padding(padding: const EdgeInsets.fromLTRB(10,8,10,12), child: Row(children: [
           IconButton(tooltip: 'Смайлики', onPressed: _emoji, icon: const Icon(Icons.emoji_emotions_outlined)),
           IconButton(tooltip: 'Фото', onPressed: _sending ? null : _pickImage, icon: const Icon(Icons.image_outlined)),
           IconButton(tooltip: 'Видеокружок', onPressed: _sending ? null : _recordCircle, icon: const Icon(Icons.video_camera_front_outlined)),
@@ -253,14 +331,10 @@ class MediaBubble extends StatelessWidget {
   final ChatService service;
 
   @override
-  Widget build(BuildContext context) => FutureBuilder<String>(
-    future: service.mediaUrl(message.mediaPath!),
-    builder: (context, snapshot) {
-      if (!snapshot.hasData) return const SizedBox(width: 190,height:130,child:Center(child:CircularProgressIndicator()));
-      return FutureBuilder<File>(
-        future: DefaultCacheManager().getSingleFile(snapshot.data!),
-        builder: (context, file) {
-          if (!file.hasData) return const SizedBox(width:190,height:130,child:Center(child:CircularProgressIndicator()));
+  Widget build(BuildContext context) => FutureBuilder<File>(
+    future: service.cachedMediaFile(message.mediaPath!),
+    builder: (context, file) {
+          if (!file.hasData) return TweenAnimationBuilder<double>(tween: Tween(begin: .35, end: .8), duration: const Duration(milliseconds: 850), curve: Curves.easeInOut, builder: (context, opacity, _) => Container(width: 220, height: 132, decoration: BoxDecoration(color: Theme.of(context).colorScheme.surfaceContainerHighest.withOpacity(opacity), borderRadius: BorderRadius.circular(14)), child: const Center(child: Icon(Icons.cloud_download_rounded, size: 30))));
           if (message.mediaType == 'image') {
             return GestureDetector(
               onTap: () {
@@ -284,8 +358,6 @@ class MediaBubble extends StatelessWidget {
             );
           }
           return VideoCircle(file: file.data!, duration: message.mediaDurationSeconds ?? 0);
-        },
-      );
     },
   );
 }

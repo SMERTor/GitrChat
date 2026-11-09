@@ -57,10 +57,10 @@ class _NameScreenState extends State<NameScreen> {
                         size: 42, color: Theme.of(context).colorScheme.primary),
                   ),
                   const SizedBox(height: 28),
-                  const Text('Добро пожаловать в OneChat',
+                  const Text('Добро пожаловать в GitrChat',
                       style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
                   const SizedBox(height: 10),
-                  Text('Один чат. Все пользователи. Общение в реальном времени.',
+                  Text('Личное пространство для общения и обмена медиа.',
                       style: TextStyle(color: Colors.grey.shade700, fontSize: 15)),
                   const SizedBox(height: 30),
                   TextField(

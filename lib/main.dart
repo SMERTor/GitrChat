@@ -60,7 +60,7 @@ class OneChatApp extends StatelessWidget {
     return ValueListenableBuilder<ThemeMode>(
       valueListenable: appThemeMode,
       builder: (context, mode, _) => MaterialApp(
-        title: 'OneChat', debugShowCheckedModeBanner: false,
+        title: 'GitrChat', debugShowCheckedModeBanner: false,
         theme: _theme(Brightness.light), darkTheme: _theme(Brightness.dark),
         themeMode: mode,
         home: StreamBuilder<AuthState>(

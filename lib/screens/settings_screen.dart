@@ -21,7 +21,7 @@ class SettingsScreen extends StatelessWidget {
         builder: (context, mode, _) => ListView(
           padding: const EdgeInsets.all(18),
           children: [
-            Text('Оформление', style: Theme.of(context).textTheme.titleMedium),
+            Text('Внешний вид', style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 8),
             Card(child: Column(children: [
               RadioListTile<ThemeMode>(value: ThemeMode.system, groupValue: mode,
@@ -37,8 +37,8 @@ class SettingsScreen extends StatelessWidget {
             const SizedBox(height: 18),
             const ListTile(
               leading: Icon(Icons.storage_outlined),
-              title: Text('Медиа и кэш'),
-              subtitle: Text('Фото и видеосообщения сохраняются в локальный кэш телефона после просмотра.'),
+              title: Text('Локальная история и медиа'),
+              subtitle: Text('История чата хранится на телефоне. При синхронизации запрашиваются только новые сообщения; прочитанная история повторно не скачивается.'),
             ),
           ],
         ),
