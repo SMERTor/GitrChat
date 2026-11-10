@@ -81,4 +81,18 @@ class ChatService {
 
   Future<int> countOnlineUsers(RealtimeChannel channel) async =>
       channel.presenceState().fold<int>(0, (sum, state) => sum + state.presences.length);
+
+  Future<void> updateLastSeen() async {
+    await client.from('profiles').update({
+      'last_seen_at': DateTime.now().toUtc().toIso8601String(),
+    }).eq('id', userId);
+  }
+
+  Future<List<Map<String, dynamic>>> loadProfiles() async {
+    final rows = await client
+        .from('profiles')
+        .select('id,name,last_seen_at')
+        .order('name');
+    return List<Map<String, dynamic>>.from(rows);
+  }
 }

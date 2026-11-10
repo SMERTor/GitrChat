@@ -81,3 +81,8 @@ do $$ begin
     alter publication supabase_realtime add table public.messages;
   end if;
 end $$;
+
+
+-- Presence / last-seen metadata
+alter table public.profiles
+  add column if not exists last_seen_at timestamptz;

@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:camera/camera.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:video_player/video_player.dart';
 import 'package:video_compress/video_compress.dart';
@@ -32,6 +33,8 @@ class _ChatScreenState extends State<ChatScreen> {
   List<ChatMessage> _messages = [];
   final Set<String> _typingUsers = {};
   int _onlineCount = 1;
+  final Set<String> _onlineUserIds = {};
+  Timer? _lastSeenTimer;
   bool _loading = true, _sending = false;
   Timer? _typingTimer;
   bool _typingSent = false;
@@ -86,6 +89,11 @@ class _ChatScreenState extends State<ChatScreen> {
       }
       _subscribeMessages();
       _subscribePresence();
+      await _service.updateLastSeen();
+      _lastSeenTimer?.cancel();
+      _lastSeenTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+        _service.updateLastSeen();
+      });
     } catch (_) {
       if (mounted && _messages.isEmpty) _error('Нет подключения. Локальная история появится после первой синхронизации.');
     } finally {
@@ -121,8 +129,113 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _refreshPresenceCount() async {
     final channel = _channel;
     if (channel == null) return;
-    final count = await _service.countOnlineUsers(channel);
-    if (mounted) setState(() => _onlineCount = count);
+    final states = channel.presenceState();
+    final ids = <String>{};
+    for (final state in states) {
+      for (final presence in state.presences) {
+        final payload = presence.payload;
+        final id = payload['user_id']?.toString();
+        if (id != null && id.isNotEmpty) ids.add(id);
+      }
+    }
+    if (mounted) {
+      setState(() {
+        _onlineUserIds
+          ..clear()
+          ..addAll(ids);
+        _onlineCount = ids.length;
+      });
+    }
+  }
+
+  Future<void> _showOnlineUsers() async {
+    try {
+      final profiles = await _service.loadProfiles();
+      if (!mounted) return;
+      final onlineIds = Set<String>.from(_onlineUserIds);
+      await showModalBottomSheet<void>(
+        context: context,
+        showDragHandle: true,
+        isScrollControlled: true,
+        builder: (sheetContext) => SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Участники чата',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
+                const SizedBox(height: 14),
+                ...profiles.map((profile) {
+                  final id = profile['id']?.toString() ?? '';
+                  final name = profile['name']?.toString() ?? 'Пользователь';
+                  final isOnline = onlineIds.contains(id);
+                  final rawLastSeen = profile['last_seen_at']?.toString();
+                  final lastSeen = rawLastSeen == null
+                      ? null : DateTime.tryParse(rawLastSeen)?.toLocal();
+                  return ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: Stack(
+                      children: [
+                        CircleAvatar(
+                          backgroundColor: const Color(0xFF11F3A6).withOpacity(.16),
+                          foregroundColor: const Color(0xFF11A879),
+                          child: Text(_initials(name)),
+                        ),
+                        Positioned(
+                          right: 0, bottom: 0,
+                          child: Container(
+                            width: 11, height: 11,
+                            decoration: BoxDecoration(
+                              color: isOnline ? const Color(0xFF11F3A6) : Colors.grey,
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: Theme.of(sheetContext).scaffoldBackgroundColor,
+                                width: 2,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    title: Text(name, style: const TextStyle(fontWeight: FontWeight.w700)),
+                    subtitle: Text(isOnline
+                        ? 'В сети'
+                        : lastSeen == null
+                            ? 'Время последнего посещения неизвестно'
+                            : 'Был(а) ${_lastSeenLabel(lastSeen)}'),
+                    trailing: isOnline
+                        ? const Text('Онлайн', style: TextStyle(
+                            color: Color(0xFF11B982), fontWeight: FontWeight.w700))
+                        : null,
+                  );
+                }),
+                if (profiles.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 20),
+                    child: Text('Пока нет участников'),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      );
+    } catch (_) {
+      if (mounted) _error('Не удалось загрузить список участников.');
+    }
+  }
+
+  String _lastSeenLabel(DateTime value) {
+    final now = DateTime.now();
+    final difference = now.difference(value);
+    if (difference.inMinutes < 1) return 'только что';
+    if (difference.inMinutes < 60) return '${difference.inMinutes} мин. назад';
+    if (difference.inHours < 24) return '${difference.inHours} ч. назад';
+    if (difference.inDays == 1) return 'вчера в ${_time(value)}';
+    return '${value.day.toString().padLeft(2, '0')}.'
+        '${value.month.toString().padLeft(2, '0')} '
+        'в ${_time(value)}';
   }
 
   void _onTextChanged(String value) {
@@ -163,10 +276,15 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _recordCircle() async {
     try {
-      final picked = await _picker.pickVideo(source: ImageSource.camera,
-        preferredCameraDevice: CameraDevice.front, maxDuration: const Duration(seconds: 60));
-      if (picked != null) await _upload(File(picked.path), 'video_circle');
-    } catch (_) { if (mounted) _error('Не удалось записать видеосообщение.'); }
+      final file = await Navigator.of(context).push<File>(
+        MaterialPageRoute(builder: (_) => const CircleRecorderScreen()),
+      );
+      if (file != null && mounted) {
+        await _upload(file, 'video_circle');
+      }
+    } catch (_) {
+      if (mounted) _error('Не удалось записать видеосообщение.');
+    }
   }
 
   Future<void> _upload(File file, String type, {int? duration}) async {
@@ -197,6 +315,70 @@ class _ChatScreenState extends State<ChatScreen> {
       }
       if (mounted) setState(() => _sending = false);
     }
+  }
+
+  Future<void> _showAttachMenu() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) => SafeArea(
+        child: Container(
+          margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+          padding: const EdgeInsets.fromLTRB(18, 18, 18, 22),
+          decoration: BoxDecoration(
+            color: Theme.of(sheetContext).colorScheme.surface,
+            borderRadius: BorderRadius.circular(28),
+            border: Border.all(color: const Color(0xFF11F3A6).withOpacity(.22)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 38, height: 4,
+                  decoration: BoxDecoration(
+                    color: Theme.of(sheetContext).dividerColor,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 18),
+              const Text('Поделиться',
+                style: TextStyle(fontSize: 19, fontWeight: FontWeight.w800)),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Expanded(
+                    child: _AttachmentTile(
+                      icon: Icons.photo_rounded,
+                      title: 'Фото',
+                      subtitle: 'Из галереи',
+                      onTap: () {
+                        Navigator.pop(sheetContext);
+                        _pickImage();
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: _AttachmentTile(
+                      icon: Icons.circle,
+                      title: 'Кружочек',
+                      subtitle: 'Записать видео',
+                      onTap: () {
+                        Navigator.pop(sheetContext);
+                        _recordCircle();
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   Future<void> _emoji() async {
@@ -240,7 +422,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   void dispose() {
-    _typingTimer?.cancel(); _messageSub?.cancel();
+    _typingTimer?.cancel(); _lastSeenTimer?.cancel(); _messageSub?.cancel();
     final channel = _channel;
     if (channel != null) _client.removeChannel(channel);
     _text.dispose(); _scroll.dispose(); super.dispose();
@@ -254,7 +436,18 @@ class _ChatScreenState extends State<ChatScreen> {
         CircleAvatar(backgroundColor: const Color(0xFF11F3A6), child: const Icon(Icons.forum_rounded, color: Color(0xFF04251B))),
         const SizedBox(width: 10), Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           const Text('GitrChat', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
-          Row(children: [Container(width: 7, height: 7, decoration: const BoxDecoration(color: Color(0xFF11F3A6), shape: BoxShape.circle)), const SizedBox(width: 6), Text('$_onlineCount онлайн', style: const TextStyle(fontSize: 12, color: Color(0xFF11B982)))]),
+          InkWell(
+            onTap: _showOnlineUsers,
+            borderRadius: BorderRadius.circular(12),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 3),
+              child: Row(children: [
+                Container(width: 7, height: 7, decoration: const BoxDecoration(color: Color(0xFF11F3A6), shape: BoxShape.circle)),
+                const SizedBox(width: 6),
+                Text('$_onlineCount онлайн · участники', style: const TextStyle(fontSize: 12, color: Color(0xFF11B982))),
+              ]),
+            ),
+          ),
         ]),
       ]), actions: [
         IconButton(tooltip: 'Настройки', icon: const Icon(Icons.tune_rounded),
@@ -319,43 +512,231 @@ class _ChatScreenState extends State<ChatScreen> {
               )
             : const SizedBox(key: ValueKey('media-idle'), height: 0),
         ),
-        SafeArea(top: false, child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-          child: Container(
-            padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
-            decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.surface,
-              borderRadius: BorderRadius.circular(30),
-              border: Border.all(color: Theme.of(context).brightness == Brightness.dark
-                ? Colors.white.withOpacity(.06) : const Color(0xFFE0EEE8)),
-              boxShadow: [BoxShadow(color: Colors.black.withOpacity(
-                Theme.of(context).brightness == Brightness.dark ? .12 : .04),
-                blurRadius: 20, offset: const Offset(0, 5))],
-            ),
-            child: Row(children: [
-              IconButton(tooltip: 'Смайлики', onPressed: _emoji,
-                color: const Color(0xFF11B982), icon: const Icon(Icons.sentiment_satisfied_alt_rounded)),
-              IconButton(tooltip: 'Фото', onPressed: _sending ? null : _pickImage,
-                color: const Color(0xFF11B982), icon: const Icon(Icons.image_rounded)),
-              IconButton(tooltip: 'Видеокружок', onPressed: _sending ? null : _recordCircle,
-                color: const Color(0xFF11B982), icon: const Icon(Icons.video_camera_front_rounded)),
-              Expanded(child: TextField(controller: _text, minLines: 1, maxLines: 4,
-                textCapitalization: TextCapitalization.sentences, onChanged: _onTextChanged,
-                onSubmitted: (_) => _send(), decoration: const InputDecoration(
-                  hintText: 'Написать сообщение…', filled: false, border: InputBorder.none,
-                  enabledBorder: InputBorder.none, focusedBorder: InputBorder.none,
-                  contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 10)))),
-              const SizedBox(width: 4),
-              Container(
-                decoration: const BoxDecoration(color: Color(0xFF11F3A6), shape: BoxShape.circle),
-                child: IconButton(onPressed: _sending ? null : _send,
-                  color: const Color(0xFF04251B),
-                  icon: _sending ? const SizedBox(width:18,height:18,child:CircularProgressIndicator(strokeWidth:2,color:Color(0xFF04251B))) : const Icon(Icons.arrow_upward_rounded)),
+        SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 7, 12, 10),
+            child: Container(
+              decoration: BoxDecoration(
+                color: Theme.of(context).brightness == Brightness.dark
+                    ? const Color(0xFF111C19)
+                    : const Color(0xFFF8FFFC),
+                borderRadius: BorderRadius.circular(28),
+                border: Border.all(
+                  color: const Color(0xFF11F3A6).withOpacity(
+                    Theme.of(context).brightness == Brightness.dark ? .22 : .48,
+                  ),
+                  width: 1.1,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: const Color(0xFF11F3A6).withOpacity(.09),
+                    blurRadius: 24,
+                    offset: const Offset(0, 7),
+                  ),
+                  BoxShadow(
+                    color: Colors.black.withOpacity(
+                      Theme.of(context).brightness == Brightness.dark ? .20 : .035,
+                    ),
+                    blurRadius: 12,
+                    offset: const Offset(0, 3),
+                  ),
+                ],
               ),
-            ]),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(8, 8, 3, 8),
+                        child: Material(
+                          color: const Color(0xFF11F3A6),
+                          shape: const CircleBorder(),
+                          child: InkWell(
+                            customBorder: const CircleBorder(),
+                            onTap: _sending ? null : _showAttachMenu,
+                            child: const SizedBox(
+                              width: 46,
+                              height: 46,
+                              child: Icon(
+                                Icons.add_rounded,
+                                color: Color(0xFF04251B),
+                                size: 30,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      Expanded(
+                        child: Padding(
+                          padding: const EdgeInsets.only(left: 5, top: 9, bottom: 7),
+                          child: TextField(
+                            controller: _text,
+                            minLines: 1,
+                            maxLines: 5,
+                            textCapitalization: TextCapitalization.sentences,
+                            onChanged: _onTextChanged,
+                            onSubmitted: (_) => _send(),
+                            style: const TextStyle(fontSize: 15.5, height: 1.35),
+                            decoration: InputDecoration(
+                              hintText: 'Напиши что-нибудь…',
+                              hintStyle: TextStyle(
+                                color: Theme.of(context).hintColor.withOpacity(.8),
+                                fontSize: 15,
+                              ),
+                              filled: false,
+                              border: InputBorder.none,
+                              enabledBorder: InputBorder.none,
+                              focusedBorder: InputBorder.none,
+                              isDense: true,
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 7,
+                                vertical: 11,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(0, 8, 5, 8),
+                        child: IconButton(
+                          tooltip: 'Смайлики',
+                          onPressed: _emoji,
+                          style: IconButton.styleFrom(
+                            foregroundColor: const Color(0xFF11B982),
+                            minimumSize: const Size(42, 42),
+                          ),
+                          icon: const Icon(Icons.mood_rounded, size: 25),
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(0, 7, 7, 7),
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 180),
+                          decoration: BoxDecoration(
+                            gradient: const LinearGradient(
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                              colors: [Color(0xFF11F3A6), Color(0xFF7AFFD1)],
+                            ),
+                            borderRadius: BorderRadius.circular(18),
+                            boxShadow: [
+                              BoxShadow(
+                                color: const Color(0xFF11F3A6).withOpacity(.24),
+                                blurRadius: 13,
+                                offset: const Offset(0, 4),
+                              ),
+                            ],
+                          ),
+                          child: IconButton(
+                            tooltip: 'Отправить',
+                            onPressed: _sending ? null : _send,
+                            color: const Color(0xFF04251B),
+                            icon: _sending
+                                ? const SizedBox(
+                                    width: 19,
+                                    height: 19,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: Color(0xFF04251B),
+                                    ),
+                                  )
+                                : const Icon(Icons.arrow_upward_rounded, size: 25),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(18, 0, 18, 9),
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.lock_outline_rounded,
+                          size: 12,
+                          color: Theme.of(context).hintColor,
+                        ),
+                        const SizedBox(width: 5),
+                        Text(
+                          'Личное пространство',
+                          style: TextStyle(
+                            fontSize: 10.5,
+                            letterSpacing: .2,
+                            color: Theme.of(context).hintColor,
+                          ),
+                        ),
+                        const Spacer(),
+                        Text(
+                          '＋  Медиа',
+                          style: TextStyle(
+                            fontSize: 10.5,
+                            color: Theme.of(context).hintColor,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ),
-        )),
+        ),
       ]),
+    );
+  }
+}
+
+class _AttachmentTile extends StatelessWidget {
+  const _AttachmentTile({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: const Color(0xFF11F3A6).withOpacity(.09),
+      borderRadius: BorderRadius.circular(20),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(20),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 16),
+          child: Row(
+            children: [
+              Container(
+                width: 42,
+                height: 42,
+                decoration: const BoxDecoration(
+                  color: Color(0xFF11F3A6),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(icon, color: const Color(0xFF04251B)),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title, style: const TextStyle(fontWeight: FontWeight.w800)),
+                    const SizedBox(height: 3),
+                    Text(subtitle, style: Theme.of(context).textTheme.bodySmall),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -705,6 +1086,341 @@ class _CircleVideoViewerState extends State<CircleVideoViewer> {
               : const CircularProgressIndicator(
                   color: Color(0xFF11F3A6),
                 ),
+        ),
+      ),
+    );
+  }
+}
+
+
+class CircleRecorderScreen extends StatefulWidget {
+  const CircleRecorderScreen({super.key});
+
+  @override
+  State<CircleRecorderScreen> createState() => _CircleRecorderScreenState();
+}
+
+class _CircleRecorderScreenState extends State<CircleRecorderScreen>
+    with WidgetsBindingObserver {
+  CameraController? _camera;
+  List<CameraDescription> _cameras = [];
+  int _cameraIndex = 0;
+  Timer? _ticker;
+  int _seconds = 0;
+  bool _recording = false;
+  bool _paused = false;
+  bool _initializing = true;
+  bool _stopping = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _initializeCamera();
+  }
+
+  Future<void> _initializeCamera() async {
+    try {
+      _cameras = await availableCameras();
+      if (_cameras.isEmpty) throw Exception('Камера не найдена');
+      final front = _cameras.indexWhere(
+        (camera) => camera.lensDirection == CameraLensDirection.front,
+      );
+      _cameraIndex = front >= 0 ? front : 0;
+      await _createController();
+    } catch (e) {
+      if (mounted) setState(() {
+        _error = 'Не удалось открыть камеру. Проверьте разрешение на камеру и микрофон.';
+        _initializing = false;
+      });
+    }
+  }
+
+  Future<void> _createController() async {
+    final old = _camera;
+    _camera = null;
+    await old?.dispose();
+    final controller = CameraController(
+      _cameras[_cameraIndex],
+      ResolutionPreset.medium,
+      enableAudio: true,
+      imageFormatGroup: ImageFormatGroup.jpeg,
+    );
+    _camera = controller;
+    await controller.initialize();
+    if (mounted) setState(() => _initializing = false);
+  }
+
+  Future<void> _switchCamera() async {
+    if (_recording || _cameras.length < 2) return;
+    setState(() => _initializing = true);
+    _cameraIndex = (_cameraIndex + 1) % _cameras.length;
+    try {
+      await _createController();
+    } catch (_) {
+      if (mounted) setState(() {
+        _error = 'Не удалось переключить камеру.';
+        _initializing = false;
+      });
+    }
+  }
+
+  Future<void> _startRecording() async {
+    final camera = _camera;
+    if (camera == null || !camera.value.isInitialized || _recording) return;
+    try {
+      await camera.prepareForVideoRecording();
+      await camera.startVideoRecording();
+      setState(() {
+        _recording = true;
+        _paused = false;
+        _seconds = 0;
+      });
+      _ticker?.cancel();
+      _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
+        if (!mounted || _paused) return;
+        setState(() => _seconds++);
+        if (_seconds >= 60) _stopAndSend();
+      });
+    } catch (_) {
+      if (mounted) setState(() => _error = 'Не удалось начать запись.');
+    }
+  }
+
+  Future<void> _togglePause() async {
+    final camera = _camera;
+    if (camera == null || !_recording) return;
+    try {
+      if (_paused) {
+        await camera.resumeVideoRecording();
+      } else {
+        await camera.pauseVideoRecording();
+      }
+      if (mounted) setState(() => _paused = !_paused);
+    } catch (_) {
+      if (mounted) setState(() => _error = 'Не удалось изменить состояние записи.');
+    }
+  }
+
+  Future<void> _stopAndSend() async {
+    final camera = _camera;
+    if (camera == null || !_recording || _stopping) return;
+    _stopping = true;
+    _ticker?.cancel();
+    try {
+      final video = await camera.stopVideoRecording();
+      if (!mounted) return;
+      Navigator.of(context).pop(File(video.path));
+    } catch (_) {
+      if (mounted) setState(() {
+        _recording = false;
+        _error = 'Не удалось сохранить запись.';
+      });
+    } finally {
+      _stopping = false;
+    }
+  }
+
+  Future<void> _discard() async {
+    final camera = _camera;
+    _ticker?.cancel();
+    if (_recording && camera != null) {
+      try {
+        final file = await camera.stopVideoRecording();
+        await File(file.path).delete();
+      } catch (_) {}
+    }
+    if (mounted) Navigator.of(context).pop();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused) {
+      _ticker?.cancel();
+      _camera?.dispose();
+      _camera = null;
+      if (mounted && !_stopping) {
+        setState(() {
+          _recording = false;
+          _paused = false;
+          _initializing = true;
+          _error = 'Запись остановлена при сворачивании приложения. Откройте камеру снова.';
+        });
+      }
+    }
+  }
+
+  String get _timerText =>
+      '00:${_seconds.toString().padLeft(2, '0')}';
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _ticker?.cancel();
+    _camera?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final camera = _camera;
+    return Scaffold(
+      backgroundColor: const Color(0xFF07110E),
+      appBar: AppBar(
+        backgroundColor: const Color(0xFF07110E),
+        foregroundColor: Colors.white,
+        title: const Text('Видеокружок'),
+        actions: [
+          IconButton(
+            tooltip: 'Переключить камеру',
+            onPressed: _recording ? null : _switchCamera,
+            icon: const Icon(Icons.flip_camera_android_rounded),
+          ),
+        ],
+      ),
+      body: SafeArea(
+        child: Column(
+          children: [
+            const Spacer(),
+            Center(
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                width: MediaQuery.sizeOf(context).width * .86,
+                height: MediaQuery.sizeOf(context).width * .86,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: _recording
+                        ? const Color(0xFFFF526B)
+                        : const Color(0xFF11F3A6),
+                    width: _recording ? 4 : 2,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: (_recording
+                              ? const Color(0xFFFF526B)
+                              : const Color(0xFF11F3A6))
+                          .withOpacity(.18),
+                      blurRadius: 30,
+                    ),
+                  ],
+                ),
+                child: ClipOval(
+                  child: _initializing
+                      ? const Center(
+                          child: CircularProgressIndicator(
+                            color: Color(0xFF11F3A6),
+                          ),
+                        )
+                      : camera != null && camera.value.isInitialized
+                          ? CameraPreview(camera)
+                          : Center(
+                              child: Padding(
+                                padding: const EdgeInsets.all(24),
+                                child: Text(
+                                  _error ?? 'Камера недоступна',
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(color: Colors.white),
+                                ),
+                              ),
+                            ),
+                ),
+              ),
+            ),
+            const Spacer(),
+            if (_error != null)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+                child: Text(
+                  _error!,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.white70),
+                ),
+              ),
+            const SizedBox(height: 18),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(.42),
+                borderRadius: BorderRadius.circular(24),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (_recording)
+                    const Icon(Icons.circle, color: Color(0xFFFF526B), size: 12),
+                  if (_recording) const SizedBox(width: 8),
+                  Text(
+                    _recording ? _timerText : 'До 60 секунд',
+                    style: const TextStyle(color: Colors.white, fontSize: 16),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 26),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(28, 0, 28, 20),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  IconButton.filledTonal(
+                    onPressed: _discard,
+                    style: IconButton.styleFrom(
+                      foregroundColor: const Color(0xFFFF526B),
+                      backgroundColor: Colors.white10,
+                      minimumSize: const Size(58, 58),
+                    ),
+                    icon: const Icon(Icons.delete_outline_rounded, size: 30),
+                  ),
+                  if (_recording)
+                    IconButton.filled(
+                      onPressed: _togglePause,
+                      style: IconButton.styleFrom(
+                        backgroundColor: const Color(0xFF11F3A6),
+                        foregroundColor: const Color(0xFF04251B),
+                        minimumSize: const Size(66, 66),
+                      ),
+                      icon: Icon(
+                        _paused ? Icons.play_arrow_rounded : Icons.pause_rounded,
+                        size: 34,
+                      ),
+                    )
+                  else
+                    GestureDetector(
+                      onTap: _initializing || _error != null
+                          ? null
+                          : _startRecording,
+                      child: Container(
+                        width: 74,
+                        height: 74,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white, width: 4),
+                          color: const Color(0xFFFF526B),
+                        ),
+                        child: const Icon(
+                          Icons.videocam_rounded,
+                          color: Colors.white,
+                          size: 34,
+                        ),
+                      ),
+                    ),
+                  IconButton.filled(
+                    onPressed: _recording ? _stopAndSend : null,
+                    style: IconButton.styleFrom(
+                      backgroundColor: const Color(0xFF11F3A6),
+                      foregroundColor: const Color(0xFF04251B),
+                      disabledBackgroundColor: Colors.white12,
+                      minimumSize: const Size(58, 58),
+                    ),
+                    icon: const Icon(Icons.arrow_upward_rounded, size: 30),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
     );
