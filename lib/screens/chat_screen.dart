@@ -450,6 +450,19 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
         ]),
       ]), actions: [
+        IconButton(
+          tooltip: 'Медиа чата',
+          icon: const Icon(Icons.photo_library_outlined),
+          onPressed: () => Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => ChatMediaGalleryScreen(
+                messages: List<ChatMessage>.from(_messages),
+                service: _service,
+              ),
+            ),
+          ),
+        ),
         IconButton(tooltip: 'Настройки', icon: const Icon(Icons.tune_rounded),
           onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const SettingsScreen()))),
         IconButton(tooltip: 'Выйти', onPressed: () => _client.auth.signOut(), icon: const Icon(Icons.logout_rounded)),
@@ -684,6 +697,424 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
         ),
       ]),
+    );
+  }
+}
+
+class ChatMediaGalleryScreen extends StatefulWidget {
+  const ChatMediaGalleryScreen({
+    super.key,
+    required this.messages,
+    required this.service,
+  });
+
+  final List<ChatMessage> messages;
+  final ChatService service;
+
+  @override
+  State<ChatMediaGalleryScreen> createState() => _ChatMediaGalleryScreenState();
+}
+
+class _ChatMediaGalleryScreenState extends State<ChatMediaGalleryScreen> {
+  int _filter = 0; // all, photos, circles
+  bool _loading = true;
+  List<_CachedChatMedia> _items = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCachedMedia();
+  }
+
+  Future<void> _loadCachedMedia() async {
+    setState(() => _loading = true);
+    final cache = DefaultCacheManager();
+    final found = <_CachedChatMedia>[];
+    final mediaMessages = widget.messages
+        .where((m) => m.hasMedia && m.mediaPath != null)
+        .toList()
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+
+    for (final message in mediaMessages) {
+      final key = 'gitrchat-media-${message.mediaPath}';
+      final cached = await cache.getFileFromCache(key);
+      if (cached != null && await cached.file.exists()) {
+        found.add(_CachedChatMedia(message: message, file: cached.file));
+      }
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _items = found;
+      _loading = false;
+    });
+  }
+
+  List<_CachedChatMedia> get _visibleItems => _items.where((item) {
+    if (_filter == 1) return item.message.mediaType == 'image';
+    if (_filter == 2) return item.message.mediaType == 'video_circle';
+    return true;
+  }).toList();
+
+  @override
+  Widget build(BuildContext context) {
+    final visible = _visibleItems;
+    final photos = _items.where((e) => e.message.mediaType == 'image').length;
+    final circles = _items.where((e) => e.message.mediaType == 'video_circle').length;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Медиа чата'),
+        actions: [
+          IconButton(
+            tooltip: 'Обновить список',
+            onPressed: _loadCachedMedia,
+            icon: const Icon(Icons.refresh_rounded),
+          ),
+        ],
+      ),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
+            child: Row(
+              children: [
+                Expanded(
+                  child: _GalleryStat(
+                    icon: Icons.image_rounded,
+                    label: 'Фото',
+                    count: photos,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: _GalleryStat(
+                    icon: Icons.play_circle_fill_rounded,
+                    label: 'Кружочки',
+                    count: circles,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Row(
+              children: [
+                _GalleryFilter(
+                  label: 'Всё',
+                  selected: _filter == 0,
+                  onTap: () => setState(() => _filter = 0),
+                ),
+                const SizedBox(width: 8),
+                _GalleryFilter(
+                  label: 'Фотографии',
+                  selected: _filter == 1,
+                  onTap: () => setState(() => _filter = 1),
+                ),
+                const SizedBox(width: 8),
+                _GalleryFilter(
+                  label: 'Кружочки',
+                  selected: _filter == 2,
+                  onTap: () => setState(() => _filter = 2),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          Expanded(
+            child: _loading
+                ? const Center(
+                    child: CircularProgressIndicator(
+                      color: Color(0xFF11F3A6),
+                    ),
+                  )
+                : visible.isEmpty
+                    ? _GalleryEmpty(
+                        filter: _filter,
+                        hasAnyCached: _items.isNotEmpty,
+                      )
+                    : GridView.builder(
+                        padding: const EdgeInsets.fromLTRB(12, 4, 12, 20),
+                        gridDelegate:
+                            const SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: 3,
+                          crossAxisSpacing: 8,
+                          mainAxisSpacing: 8,
+                          childAspectRatio: .88,
+                        ),
+                        itemCount: visible.length,
+                        itemBuilder: (context, index) {
+                          final item = visible[index];
+                          final isVideo =
+                              item.message.mediaType == 'video_circle';
+                          return GestureDetector(
+                            onTap: () {
+                              if (isVideo) {
+                                Navigator.of(context).push(
+                                  MaterialPageRoute<void>(
+                                    builder: (_) => CircleVideoViewer(
+                                      file: item.file,
+                                      duration:
+                                          item.message.mediaDurationSeconds ?? 0,
+                                    ),
+                                  ),
+                                );
+                              } else {
+                                Navigator.of(context).push(
+                                  MaterialPageRoute<void>(
+                                    builder: (_) => Scaffold(
+                                      appBar: AppBar(),
+                                      backgroundColor: Colors.black,
+                                      body: Center(
+                                        child: InteractiveViewer(
+                                          child: Image.file(
+                                            item.file,
+                                            fit: BoxFit.contain,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              }
+                            },
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(17),
+                              child: Stack(
+                                fit: StackFit.expand,
+                                children: [
+                                  if (isVideo)
+                                    Container(
+                                      color: const Color(0xFF10231D),
+                                      child: const Center(
+                                        child: Icon(
+                                          Icons.play_circle_fill_rounded,
+                                          color: Color(0xFF11F3A6),
+                                          size: 48,
+                                        ),
+                                      ),
+                                    )
+                                  else
+                                    Image.file(item.file, fit: BoxFit.cover),
+                                  Positioned(
+                                    left: 7,
+                                    right: 7,
+                                    bottom: 7,
+                                    child: Row(
+                                      children: [
+                                        Icon(
+                                          isVideo
+                                              ? Icons.videocam_rounded
+                                              : Icons.image_rounded,
+                                          color: Colors.white,
+                                          size: 13,
+                                        ),
+                                        const SizedBox(width: 4),
+                                        Expanded(
+                                          child: Text(
+                                            _galleryDate(item.message.createdAt),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: const TextStyle(
+                                              color: Colors.white,
+                                              fontSize: 10,
+                                              shadows: [
+                                                Shadow(
+                                                  color: Colors.black87,
+                                                  blurRadius: 5,
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  Positioned(
+                                    top: 7,
+                                    right: 7,
+                                    child: Container(
+                                      padding: const EdgeInsets.all(5),
+                                      decoration: BoxDecoration(
+                                        color: Colors.black.withOpacity(.42),
+                                        shape: BoxShape.circle,
+                                      ),
+                                      child: Icon(
+                                        Icons.download_done_rounded,
+                                        color: const Color(0xFF11F3A6),
+                                        size: 14,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(18, 0, 18, 12),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.offline_pin_rounded,
+                  color: Color(0xFF11B982),
+                  size: 16,
+                ),
+                const SizedBox(width: 7),
+                Expanded(
+                  child: Text(
+                    'Здесь показаны только медиа, уже сохранённые на этом телефоне',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _galleryDate(DateTime date) =>
+      '${date.day.toString().padLeft(2, '0')}.'
+      '${date.month.toString().padLeft(2, '0')}.'
+      '${date.year}';
+}
+
+class _CachedChatMedia {
+  const _CachedChatMedia({required this.message, required this.file});
+  final ChatMessage message;
+  final File file;
+}
+
+class _GalleryStat extends StatelessWidget {
+  const _GalleryStat({
+    required this.icon,
+    required this.label,
+    required this.count,
+  });
+  final IconData icon;
+  final String label;
+  final int count;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.all(13),
+        decoration: BoxDecoration(
+          color: const Color(0xFF11F3A6).withOpacity(.09),
+          borderRadius: BorderRadius.circular(17),
+          border: Border.all(
+            color: const Color(0xFF11F3A6).withOpacity(.20),
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, color: const Color(0xFF11B982), size: 21),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '$count',
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  Text(label, style: Theme.of(context).textTheme.bodySmall),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+}
+
+class _GalleryFilter extends StatelessWidget {
+  const _GalleryFilter({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(24),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 9),
+          decoration: BoxDecoration(
+            color: selected
+                ? const Color(0xFF11F3A6)
+                : Theme.of(context).colorScheme.surface,
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(
+              color: selected
+                  ? const Color(0xFF11F3A6)
+                  : Theme.of(context).dividerColor,
+            ),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              color: selected ? const Color(0xFF04251B) : null,
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+      );
+}
+
+class _GalleryEmpty extends StatelessWidget {
+  const _GalleryEmpty({
+    required this.filter,
+    required this.hasAnyCached,
+  });
+  final int filter;
+  final bool hasAnyCached;
+
+  @override
+  Widget build(BuildContext context) {
+    final text = hasAnyCached
+        ? 'В этой категории пока ничего нет'
+        : 'Пока нет скачанных фото и кружочков\\nОткрой медиа в чате — оно появится здесь';
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(28),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 76,
+              height: 76,
+              decoration: BoxDecoration(
+                color: const Color(0xFF11F3A6).withOpacity(.12),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.photo_library_outlined,
+                color: Color(0xFF11B982),
+                size: 36,
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              text,
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

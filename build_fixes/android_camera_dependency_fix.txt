@@ -1,0 +1,23 @@
+Исправление ошибки:
+class file for androidx.concurrent.futures.CallbackToFutureAdapter not found
+
+После `flutter create . --platforms android` открой:
+android/app/build.gradle.kts
+
+Внутри блока dependencies { ... } добавь:
+implementation("androidx.concurrent:concurrent-futures:1.2.0")
+
+Если файл называется build.gradle (Groovy), добавь:
+implementation 'androidx.concurrent:concurrent-futures:1.2.0'
+
+Затем выполни:
+flutter clean
+flutter pub get
+cd android
+./gradlew --refresh-dependencies
+cd ..
+flutter build apk --release
+
+Если проект собирается в GitHub Actions на Linux, эти же команды добавь перед `flutter build apk --release`.
+
+Предупреждение KGP от camera_android_camerax/video_compress не является текущей причиной падения. Не обновляй Kotlin/Gradle наугад: сначала проверь успешную сборку с недостающей AndroidX-библиотекой.

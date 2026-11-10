@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'screens/name_screen.dart';
 import 'screens/chat_screen.dart';
+import 'screens/privacy_lock_gate.dart';
 import 'theme_controller.dart';
 
 const supabaseUrl = String.fromEnvironment('SUPABASE_URL',
@@ -100,7 +101,7 @@ class OneChatApp extends StatelessWidget {
         home: StreamBuilder<AuthState>(
           stream: client.auth.onAuthStateChange,
           builder: (context, snapshot) => client.auth.currentSession == null
-              ? const NameScreen() : const ChatScreen(),
+              ? const NameScreen() : const PrivacyLockGate(child: ChatScreen()),
         ),
       ),
     );
