@@ -1,16 +1,10 @@
-GitrChat Android platform scaffold
+GitrChat Android Gradle notes
 
-The CameraX compile dependency is already included in android/app/build.gradle.kts:
-implementation("androidx.concurrent:concurrent-futures:1.2.0")
+The app module build.gradle.kts uses the AGP 9 ApplicationExtension DSL and
+Kotlin compilerOptions DSL to avoid deprecated android/kotlinOptions accessors.
+It also includes androidx.concurrent:concurrent-futures:1.2.0 for CameraX.
 
-This source archive intentionally does not contain the Gradle wrapper JAR or the Flutter SDK's Gradle plugin loader files. Those are generated/provided by Flutter tooling.
-After installing Flutter, run these commands from the project root:
-  flutter create . --platforms android
-  flutter pub get
-  flutter build apk --release
-
-If flutter create reports that the Android platform already exists, do not delete the project; run:
-  flutter create --platforms android .
-
-Then verify that the dependency line above remains in android/app/build.gradle.kts.
-The APK build has NOT been run or verified in this environment.
+This archive does not include a complete generated Gradle wrapper or the full
+Flutter Android toolchain. The project has not been compiled in this environment.
+Use a compatible Flutter SDK, Android SDK, Gradle wrapper and plugin versions
+in your build environment, then run flutter build apk --release.

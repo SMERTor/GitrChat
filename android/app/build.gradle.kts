@@ -5,7 +5,9 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
-android {
+// AGP 9.0 exposes the public ApplicationExtension DSL. Configure it directly
+// instead of the deprecated Project.android(BaseAppModuleExtension) accessor.
+extensions.configure<com.android.build.api.dsl.ApplicationExtension>("android") {
     namespace = "com.gitrchat.app"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
@@ -15,16 +17,19 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_17.toString()
-    }
-
     defaultConfig {
         applicationId = "com.gitrchat.app"
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+    }
+}
+
+// Kotlin's compilerOptions DSL replaces the deprecated kotlinOptions block.
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
     }
 }
 
