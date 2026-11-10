@@ -1,0 +1,18 @@
+CameraX follow-up fix
+=====================
+
+The previous dependency was added only to :app. The failing task is
+:camera_android_camerax:compileReleaseJavaWithJavac, so that dependency must
+also be present on the Android library plugin's compile classpath.
+
+android/build.gradle.kts now adds androidx.concurrent:concurrent-futures:1.2.0
+to Android library subprojects. Keep the dependency in android/app/build.gradle.kts
+as well.
+
+The Kotlin Gradle Plugin messages and Java source/target 8 messages in the log
+are warnings, not the cause of this failed build. The fatal error is the missing
+CallbackToFutureAdapter class.
+
+This is a configuration-level fix; the project has not been built in this
+environment. If the CI workflow regenerates or replaces the android/ directory,
+ensure android/build.gradle.kts is retained after flutter create.
