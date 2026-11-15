@@ -1,47 +1,100 @@
-
-name: Build OneChat APK
+name: Build GitrChat APK
 
 on:
   workflow_dispatch:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    env:
+      # Work around duplicate filesystem-watch registration seen in some Flutter/Gradle CI builds.
+      GRADLE_OPTS: -Dorg.gradle.vfs.watch=false
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: stable
+          cache: true
 
-      - name: Create Android project
-        run: flutter create . --platforms=android
+      - name: Create Android project only when missing
+        shell: bash
+        run: |
+          if [[ ! -f android/app/build.gradle.kts && ! -f android/app/build.gradle ]]; then
+            flutter create . --platforms=android
+          else
+            echo "Android project already exists; keeping its Gradle configuration."
+          fi
 
       - name: Add internet permission
+        shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          p = Path("android/app/src/main/AndroidManifest.xml")
-          s = p.read_text()
+
+          manifest = Path("android/app/src/main/AndroidManifest.xml")
+          if not manifest.exists():
+              raise SystemExit(f"Android manifest not found: {manifest}")
+
+          content = manifest.read_text()
           permission = '<uses-permission android:name="android.permission.INTERNET"/>'
-          if permission not in s:
-              s = s.replace("<application", permission + "\n    <application", 1)
-              p.write_text(s)
+          if permission not in content:
+              marker = "<application"
+              if marker not in content:
+                  raise SystemExit("Could not find <application in AndroidManifest.xml")
+              content = content.replace(marker, permission + "\n    " + marker, 1)
+              manifest.write_text(content)
           PY
 
-      - name: Install dependencies
-        run: flutter pub get
+      - name: Clean and install dependencies
+        run: |
+          flutter clean
+          flutter pub get
 
       - name: Build APK
-        run: flutter build apk --release
+        shell: bash
+        run: |
+          set -o pipefail
+          flutter build apk --release --verbose 2>&1 | tee build-apk.log
+          APK="build/app/outputs/flutter-apk/app-release.apk"
+          if [[ ! -f "$APK" ]]; then
+            echo "::error::Flutter finished without producing $APK"
+            echo "APK output directory:"
+            find build -type f -name '*.apk' -print || true
+            echo "Gradle failure markers:"
+            grep -n -A8 -B4 -E 'FAILURE: Build failed|What went wrong:|BUILD FAILED|\* Exception is:' build-apk.log || true
+            exit 1
+          fi
+          ls -lh "$APK"
 
       - name: Upload APK
+        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: OneChat-APK
+          name: GitrChat-APK
           path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+
+      - name: Upload build log for diagnosis
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: GitrChat-build-log
+          path: build-apk.log
+          if-no-files-found: ignore
