@@ -11,10 +11,8 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
-
+    timeout-minutes: 60
     env:
-      # Work around duplicate filesystem-watch registration seen in some Flutter/Gradle CI builds.
       GRADLE_OPTS: -Dorg.gradle.vfs.watch=false
 
     steps:
@@ -27,20 +25,48 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Flutter
+      - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: stable
           cache: true
 
-      - name: Create Android project only when missing
+      # The previous workflow kept an incomplete android/ directory.
+      # Remove it so Flutter generates a complete settings.gradle + :app project.
+      - name: Recreate Android platform cleanly
         shell: bash
         run: |
-          if [[ ! -f android/app/build.gradle.kts && ! -f android/app/build.gradle ]]; then
-            flutter create . --platforms=android
-          else
-            echo "Android project already exists; keeping its Gradle configuration."
+          set -euo pipefail
+
+          ORG="com.gitrchat"
+          OLD_GRADLE="android/app/build.gradle.kts"
+          if [[ -f "$OLD_GRADLE" ]]; then
+            FOUND_ID="$(python3 - <<'PY'
+          import re
+          from pathlib import Path
+          p = Path("android/app/build.gradle.kts")
+          s = p.read_text(errors="ignore") if p.exists() else ""
+          for pattern in (r'applicationId\s*=\s*"([^"]+)"', r'namespace\s*=\s*"([^"]+)"'):
+              m = re.search(pattern, s)
+              if m:
+                  print(m.group(1))
+                  break
+          PY
+          )"
+            if [[ -n "$FOUND_ID" ]]; then
+              ORG="${FOUND_ID%.*}"
+            fi
           fi
+
+          echo "Using Android organization: $ORG"
+          rm -rf android
+          flutter create . --platforms=android --org "$ORG"
+
+          test -f android/settings.gradle || test -f android/settings.gradle.kts
+          test -f android/app/build.gradle || test -f android/app/build.gradle.kts
+
+          echo "Generated Android project files:"
+          find android -maxdepth 2 -type f | sort
 
       - name: Add internet permission
         shell: bash
@@ -57,28 +83,30 @@ jobs:
           if permission not in content:
               marker = "<application"
               if marker not in content:
-                  raise SystemExit("Could not find <application in AndroidManifest.xml")
+                  raise SystemExit("Could not find <application> in AndroidManifest.xml")
               content = content.replace(marker, permission + "\n    " + marker, 1)
               manifest.write_text(content)
           PY
 
-      - name: Clean and install dependencies
+      - name: Install dependencies
         run: |
           flutter clean
           flutter pub get
+
+      - name: Verify Gradle app module exists
+        working-directory: android
+        run: ./gradlew projects
 
       - name: Build APK
         shell: bash
         run: |
           set -o pipefail
           flutter build apk --release --verbose 2>&1 | tee build-apk.log
+
           APK="build/app/outputs/flutter-apk/app-release.apk"
           if [[ ! -f "$APK" ]]; then
-            echo "::error::Flutter finished without producing $APK"
-            echo "APK output directory:"
+            echo "::error::APK was not generated at $APK"
             find build -type f -name '*.apk' -print || true
-            echo "Gradle failure markers:"
-            grep -n -A8 -B4 -E 'FAILURE: Build failed|What went wrong:|BUILD FAILED|\* Exception is:' build-apk.log || true
             exit 1
           fi
           ls -lh "$APK"
@@ -91,7 +119,7 @@ jobs:
           path: build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
 
-      - name: Upload build log for diagnosis
+      - name: Upload build log
         if: failure()
         uses: actions/upload-artifact@v4
         with:
