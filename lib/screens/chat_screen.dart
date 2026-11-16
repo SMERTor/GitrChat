@@ -734,16 +734,9 @@ class _ChatScreenState extends State<ChatScreen> {
                             color: const Color(0xFF04251B),
                             icon: _recordingVoice
                                 ? const Icon(Icons.stop_rounded)
-                                : (_text.text.trim().isEmpty ? const Icon(Icons.mic_rounded) : (_sending
-                                ? const SizedBox(
-                                    width: 19,
-                                    height: 19,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      color: Color(0xFF04251B),
-                                    ),
-                                  )
-                                : const Icon(Icons.arrow_upward_rounded, size: 25),
+                                : (_text.text.trim().isEmpty
+                                    ? const Icon(Icons.mic_rounded)
+                                    : const Icon(Icons.arrow_upward_rounded, size: 25)),
                           ),
                         ),
                       ),
@@ -1295,6 +1288,9 @@ class _MediaBubbleState extends State<MediaBubble> {
           if (widget.message.mediaType == 'voice') {
             return VoiceMessagePlayer(file: file.data!, duration: widget.message.mediaDurationSeconds ?? 0);
           }
+          if (widget.message.mediaType == 'voice') {
+            return VoiceMessagePlayer(file: file.data!, duration: widget.message.mediaDurationSeconds ?? 0);
+          }
           if (widget.message.mediaType == 'image') {
             return GestureDetector(
               onTap: () {
@@ -1322,6 +1318,75 @@ class _MediaBubbleState extends State<MediaBubble> {
           }
           return VideoCircle(file: file.data!, duration: widget.message.mediaDurationSeconds ?? 0);
     },
+  );
+}
+
+
+class VoiceMessagePlayer extends StatefulWidget {
+  const VoiceMessagePlayer({super.key, required this.file, required this.duration});
+  final File file;
+  final int duration;
+  @override
+  State<VoiceMessagePlayer> createState() => _VoiceMessagePlayerState();
+}
+
+class _VoiceMessagePlayerState extends State<VoiceMessagePlayer> {
+  late final AudioPlayer _player;
+  bool _loading = false;
+  bool _playing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _player = AudioPlayer();
+    _player.playerStateStream.listen((state) {
+      if (mounted) setState(() => _playing = state.playing);
+    });
+  }
+
+  Future<void> _toggle() async {
+    if (_loading) return;
+    try {
+      if (_playing) {
+        await _player.pause();
+      } else {
+        setState(() => _loading = true);
+        if (_player.audioSource == null) await _player.setFilePath(widget.file.path);
+        await _player.play();
+      }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Не удалось воспроизвести аудио: $e')));
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
+  void dispose() {
+    _player.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    width: 238,
+    child: Row(mainAxisSize: MainAxisSize.min, children: [
+      IconButton(
+        onPressed: _loading ? null : _toggle,
+        icon: _loading
+          ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2))
+          : Icon(_playing ? Icons.pause_circle_filled_rounded : Icons.play_circle_fill_rounded,
+              size: 38, color: const Color(0xFF11B982)),
+      ),
+      const SizedBox(width: 4),
+      const Icon(Icons.graphic_eq_rounded, color: Color(0xFF11B982)),
+      const SizedBox(width: 8),
+      Text('\${widget.duration ~/ 60}:\${(widget.duration % 60).toString().padLeft(2, '0')}',
+        style: const TextStyle(fontWeight: FontWeight.w700)),
+      const Spacer(),
+      const Text('Голосовое', style: TextStyle(fontSize: 11, color: Color(0xFF11B982))),
+    ]),
   );
 }
 
