@@ -1489,7 +1489,7 @@ class _VoiceMessagePlayerState extends State<VoiceMessagePlayer> {
           await _player.setFilePath(widget.file.path);
           _loaded = true;
         }
-        await _player.play();
+        unawaited(_player.play());
       }
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(
