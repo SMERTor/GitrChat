@@ -102,11 +102,8 @@ jobs:
           flutter clean
           flutter pub get
 
-      - name: Verify Gradle app module exists
-        working-directory: android
-        run: ./gradlew projects
-
       - name: Build APK
+        timeout-minutes: 25
         shell: bash
         run: |
           set -o pipefail
