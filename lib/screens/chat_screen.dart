@@ -10,6 +10,8 @@ import 'package:camera/camera.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:video_player/video_player.dart';
 import 'package:video_compress/video_compress.dart';
+import 'package:record/record.dart';
+import 'package:just_audio/just_audio.dart';
 
 import '../models/chat_message.dart';
 import '../services/chat_service.dart';
@@ -25,6 +27,10 @@ class _ChatScreenState extends State<ChatScreen> {
   final _text = TextEditingController();
   final _scroll = ScrollController();
   final _picker = ImagePicker();
+  final _voiceRecorder = AudioRecorder();
+  Timer? _voiceTimer;
+  bool _recordingVoice = false;
+  int _voiceSeconds = 0;
   late final SupabaseClient _client;
   late final ChatService _service;
   late final String _myId;
@@ -317,6 +323,52 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+
+  Future<void> _toggleVoiceRecording() async {
+    if (_sending) return;
+    if (_recordingVoice) {
+      await _finishVoiceRecording();
+      return;
+    }
+    try {
+      if (!await _voiceRecorder.hasPermission()) {
+        _error('Разрешите доступ к микрофону для записи голосовых сообщений.');
+        return;
+      }
+      final path = '\${Directory.systemTemp.path}/gitrchat_voice_\${DateTime.now().microsecondsSinceEpoch}.m4a';
+      await _voiceRecorder.start(
+        const RecordConfig(encoder: AudioEncoder.aacLc, bitRate: 64000, sampleRate: 44100),
+        path: path,
+      );
+      if (!mounted) return;
+      setState(() { _recordingVoice = true; _voiceSeconds = 0; });
+      _voiceTimer?.cancel();
+      _voiceTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+        if (!mounted) { timer.cancel(); return; }
+        setState(() => _voiceSeconds++);
+        if (_voiceSeconds >= 60) _finishVoiceRecording();
+      });
+    } catch (e) {
+      if (mounted) _error('Не удалось начать запись: $e');
+    }
+  }
+
+  Future<void> _finishVoiceRecording() async {
+    if (!_recordingVoice) return;
+    _voiceTimer?.cancel();
+    final duration = _voiceSeconds.clamp(1, 60);
+    try {
+      final path = await _voiceRecorder.stop();
+      if (mounted) setState(() => _recordingVoice = false);
+      if (path != null) await _upload(File(path), 'voice', duration: duration);
+    } catch (e) {
+      if (mounted) {
+        setState(() => _recordingVoice = false);
+        _error('Не удалось сохранить голосовое сообщение: $e');
+      }
+    }
+  }
+
   Future<void> _showAttachMenu() async {
     await showModalBottomSheet<void>(
       context: context,
@@ -422,7 +474,8 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   void dispose() {
-    _typingTimer?.cancel(); _lastSeenTimer?.cancel(); _messageSub?.cancel();
+    _typingTimer?.cancel(); _lastSeenTimer?.cancel(); _messageSub?.cancel(); _voiceTimer?.cancel();
+    _voiceRecorder.dispose();
     final channel = _channel;
     if (channel != null) _client.removeChannel(channel);
     _text.dispose(); _scroll.dispose(); super.dispose();
