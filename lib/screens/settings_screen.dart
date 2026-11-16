@@ -158,7 +158,7 @@ class SettingsScreen extends StatelessWidget {
                 const Icon(Icons.chat_bubble_rounded, color: Color(0xFF11B982)),
                 const SizedBox(width: 12),
                 const Expanded(child: Text('GitrChat', style: TextStyle(fontWeight: FontWeight.w700))),
-                Text('Версия 1.1.0', style: TextStyle(color: muted, fontSize: 12)),
+                Text('Версия 1.4.0', style: TextStyle(color: muted, fontSize: 12)),
               ]),
             ),
           ],
