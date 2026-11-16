@@ -17,11 +17,26 @@ class ChatService {
   }
 
   Future<List<ChatMessage>> loadMessages({DateTime? after}) async {
-    var query = client.from('messages')
-      .select('id,user_id,body,created_at,media_path,media_type,media_duration_seconds,reply_to_message_id,reply_to_text,reply_to_user_name,profiles(name)');
-    if (after != null) query = query.gt('created_at', after.toUtc().toIso8601String());
-    final rows = await query.order('created_at', ascending: true).limit(200);
-    return rows.map((row) => ChatMessage.fromMap(row)).toList();
+    const pageSize = 200;
+    var offset = 0;
+    final allRows = <Map<String, dynamic>>[];
+    while (true) {
+      final page = after == null
+          ? await client.from('messages')
+              .select('id,user_id,body,created_at,media_path,media_type,media_duration_seconds,reply_to_message_id,reply_to_text,reply_to_user_name,profiles(name)')
+              .order('created_at', ascending: true)
+              .range(offset, offset + pageSize - 1)
+          : await client.from('messages')
+              .select('id,user_id,body,created_at,media_path,media_type,media_duration_seconds,reply_to_message_id,reply_to_text,reply_to_user_name,profiles(name)')
+              .gt('created_at', after.toUtc().toIso8601String())
+              .order('created_at', ascending: true)
+              .range(offset, offset + pageSize - 1);
+      final rows = List<Map<String, dynamic>>.from(page);
+      allRows.addAll(rows);
+      if (rows.length < pageSize) break;
+      offset += pageSize;
+    }
+    return allRows.map((row) => ChatMessage.fromMap(row)).toList();
   }
 
   Future<void> sendMessage(String text, {ChatMessage? replyTo}) async {
