@@ -4,7 +4,6 @@ import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:flutter/material.dart';
-import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:camera/camera.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -940,7 +939,6 @@ class _ChatMediaGalleryScreenState extends State<ChatMediaGalleryScreen> {
 
   Future<void> _loadCachedMedia() async {
     setState(() => _loading = true);
-    final cache = DefaultCacheManager();
     final found = <_CachedChatMedia>[];
     final mediaMessages = widget.messages
         .where((m) => m.hasMedia && m.mediaPath != null && m.mediaType != 'voice')
