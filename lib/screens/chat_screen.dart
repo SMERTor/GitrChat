@@ -36,6 +36,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   late final String _myId;
   RealtimeChannel? _channel;
   StreamSubscription<List<Map<String, dynamic>>>? _messageSub;
+  StreamSubscription<List<Map<String, dynamic>>>? _reactionSub;
+  ChatMessage? _replyTo;
+  final Map<String, List<Map<String, dynamic>>> _reactions = {};
   List<ChatMessage> _messages = [];
   final Set<String> _typingUsers = {};
   int _onlineCount = 0;
@@ -95,6 +98,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         await _saveLocalMessages();
       }
       _subscribeMessages();
+      _subscribeReactions();
+      _loadReactions();
       _subscribePresence();
       await _service.updateLastSeen();
       _lastSeenTimer?.cancel();
@@ -270,7 +275,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     final value = _text.text;
     _text.clear();
     setState(() => _sending = true);
-    try { await _service.sendMessage(value); _stopTyping(); }
+    try { await _service.sendMessage(value, replyTo: _replyTo); _stopTyping(); if (mounted) setState(() => _replyTo = null); }
     catch (_) { if (mounted) _error('Не удалось отправить сообщение.'); _text.text = value; }
     finally { if (mounted) setState(() => _sending = false); }
   }
@@ -451,6 +456,71 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     }
   }
 
+
+  void _subscribeReactions() {
+    _reactionSub = _client.from('message_reactions').stream(primaryKey: ['id'])
+      .listen((_) => _loadReactions());
+  }
+
+  Future<void> _loadReactions() async {
+    final loaded = <String, List<Map<String, dynamic>>>{};
+    for (final message in _messages) {
+      final id = int.tryParse(message.id);
+      if (id == null) continue;
+      try {
+        final rows = await _service.loadReactions(id);
+        if (rows.isNotEmpty) loaded[message.id] = rows;
+      } catch (_) {}
+    }
+    if (mounted) setState(() {
+      _reactions
+        ..clear()
+        ..addAll(loaded);
+    });
+  }
+
+  Future<void> _messageActions(ChatMessage message) async {
+    const emojis = ['❤️', '😂', '👍', '🔥', '😮', '😢'];
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      builder: (sheetContext) => SafeArea(child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ListTile(leading: const Icon(Icons.reply_rounded), title: const Text('Ответить'),
+            onTap: () => Navigator.pop(sheetContext, 'reply')),
+          Padding(padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+            child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: emojis.map((emoji) =>
+              InkWell(onTap: () => Navigator.pop(sheetContext, 'react:$emoji'),
+                child: Text(emoji, style: const TextStyle(fontSize: 27)))).toList())),
+          if (message.userId == _myId)
+            ListTile(leading: const Icon(Icons.delete_outline_rounded, color: Colors.red),
+              title: const Text('Удалить сообщение'),
+              onTap: () => Navigator.pop(sheetContext, 'delete')),
+          const SizedBox(height: 8),
+        ],
+      )),
+    );
+    if (!mounted || action == null) return;
+    if (action == 'reply') {
+      setState(() => _replyTo = message);
+      return;
+    }
+    if (action == 'delete') {
+      await _delete(message);
+      return;
+    }
+    if (action.startsWith('react:')) {
+      final id = int.tryParse(message.id);
+      if (id == null) return;
+      try {
+        await _service.toggleReaction(id, action.substring(6));
+        await _loadReactions();
+      } catch (e) {
+        if (mounted) _error('Не удалось поставить реакцию: $e');
+      }
+    }
+  }
+
   Future<void> _delete(ChatMessage message) async {
     if (message.userId != _myId) return;
     final yes = await showDialog<bool>(context: context, builder: (context) => AlertDialog(
@@ -486,7 +556,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _typingTimer?.cancel(); _lastSeenTimer?.cancel(); _messageSub?.cancel(); _voiceTimer?.cancel();
+    _typingTimer?.cancel(); _lastSeenTimer?.cancel(); _messageSub?.cancel(); _reactionSub?.cancel(); _voiceTimer?.cancel();
     _voiceRecorder.dispose();
     final channel = _channel;
     if (channel != null) _client.removeChannel(channel);
@@ -546,7 +616,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                   ? (dark ? const Color(0xFFE8FFF6) : const Color(0xFF123D30))
                   : Theme.of(context).colorScheme.onSurface;
               return GestureDetector(
-                onLongPress: mine ? () => _delete(m) : null,
+                onLongPress: () => _messageActions(m),
                 child: Padding(
                   padding: const EdgeInsets.only(bottom: 7),
                   child: Row(
@@ -580,11 +650,44 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                               padding: const EdgeInsets.fromLTRB(5, 2, 5, 4),
                               child: Text(m.userName, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: Color(0xFF11A879))),
                             ),
+                            if (m.replyToText != null)
+                              Container(
+                                width: double.infinity,
+                                margin: const EdgeInsets.fromLTRB(5, 3, 5, 7),
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF11F3A6).withOpacity(.10),
+                                  borderRadius: BorderRadius.circular(9),
+                                ),
+                                child: Text('${m.replyToUserName ?? 'Ответ'}: ${m.replyToText}',
+                                  maxLines: 2, overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(fontSize: 11, color: Color(0xFF11B982))),
+                              ),
                             if (m.hasMedia) MediaBubble(message: m, service: _service),
                             if (m.text.isNotEmpty) Padding(
                               padding: EdgeInsets.fromLTRB(m.hasMedia ? 6 : 2, m.hasMedia ? 7 : 0, 6, 2),
                               child: Text(m.text, style: TextStyle(color: textColor, height: 1.28, fontSize: 15)),
                             ),
+                            if ((_reactions[m.id] ?? []).isNotEmpty)
+                              Padding(
+                                padding: const EdgeInsets.only(left: 5, top: 4),
+                                child: Wrap(spacing: 5, children: (_reactions[m.id]!)
+                                  .fold<Map<String, int>>({}, (map, row) {
+                                    final emoji = row['emoji']?.toString() ?? '';
+                                    map[emoji] = (map[emoji] ?? 0) + 1;
+                                    return map;
+                                  }).entries.map((entry) => GestureDetector(
+                                    onTap: () => _messageActions(m),
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFF11F3A6).withOpacity(.12),
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                      child: Text('${entry.key} ${entry.value}', style: const TextStyle(fontSize: 11)),
+                                    ),
+                                  )).toList()),
+                              ),
                             Padding(
                               padding: EdgeInsets.fromLTRB(m.hasMedia ? 6 : 2, 2, 4, 1),
                               child: Align(alignment: Alignment.bottomRight, child: Row(mainAxisSize: MainAxisSize.min, children: [
@@ -656,6 +759,23 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  if (_replyTo != null)
+                    Container(
+                      margin: const EdgeInsets.fromLTRB(14, 8, 14, 2),
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF11F3A6).withOpacity(.10),
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: Row(children: [
+                        const Icon(Icons.reply_rounded, color: Color(0xFF11B982), size: 18),
+                        const SizedBox(width: 8),
+                        Expanded(child: Text('Ответ: ${_replyTo!.userName} · ${_replyTo!.text.isNotEmpty ? _replyTo!.text : 'Медиа'}',
+                          maxLines: 1, overflow: TextOverflow.ellipsis)),
+                        IconButton(onPressed: () => setState(() => _replyTo = null),
+                          icon: const Icon(Icons.close_rounded, size: 18), visualDensity: VisualDensity.compact),
+                      ]),
+                    ),
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
