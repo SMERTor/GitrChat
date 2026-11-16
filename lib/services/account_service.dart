@@ -17,17 +17,24 @@ class AccountService {
   }
 
   Future<void> createOrLink(String name, String pin) async {
+    var createdTemporarySession = false;
     if (client.auth.currentSession == null) {
       await client.auth.signInAnonymously();
+      createdTemporarySession = true;
     }
-    final result = await client.functions.invoke(
-      'claim-account',
-      body: {'name': name.trim(), 'pin': pin},
-    );
-    if (result.status < 200 || result.status >= 300) {
-      final body = result.data;
-      final error = body is Map ? body['error']?.toString() : null;
-      throw Exception(error ?? 'Не удалось привязать аккаунт');
+    try {
+      final result = await client.functions.invoke(
+        'claim-account',
+        body: {'name': name.trim(), 'pin': pin},
+      );
+      if (result.status < 200 || result.status >= 300) {
+        final body = result.data;
+        final error = body is Map ? body['error']?.toString() : null;
+        throw Exception(error ?? 'Не удалось привязать аккаунт');
+      }
+    } catch (_) {
+      if (createdTemporarySession) await client.auth.signOut();
+      rethrow;
     }
   }
 }
