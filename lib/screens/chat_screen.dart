@@ -943,7 +943,7 @@ class _ChatMediaGalleryScreenState extends State<ChatMediaGalleryScreen> {
     final cache = DefaultCacheManager();
     final found = <_CachedChatMedia>[];
     final mediaMessages = widget.messages
-        .where((m) => m.hasMedia && m.mediaPath != null)
+        .where((m) => m.hasMedia && m.mediaPath != null && m.mediaType != 'voice')
         .toList()
       ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
 
