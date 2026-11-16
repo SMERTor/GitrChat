@@ -862,7 +862,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                           ),
                           child: IconButton(
                             tooltip: _recordingVoice ? 'Остановить запись' : (_text.text.trim().isEmpty ? 'Записать голосовое сообщение' : 'Отправить'),
-                            onPressed: _sending ? null : (_text.text.trim().isEmpty ? _toggleVoiceRecording : _send),
+                            onPressed: _sending ? null : (_recordingVoice ? _finishVoiceRecording : (_text.text.trim().isEmpty ? _toggleVoiceRecording : _send)),
                             color: const Color(0xFF04251B),
                             icon: _recordingVoice
                                 ? const Icon(Icons.stop_rounded)
@@ -1466,6 +1466,7 @@ class _VoiceMessagePlayerState extends State<VoiceMessagePlayer> {
   late final AudioPlayer _player;
   bool _loading = false;
   bool _playing = false;
+  bool _loaded = false;
 
   @override
   void initState() {
@@ -1483,7 +1484,10 @@ class _VoiceMessagePlayerState extends State<VoiceMessagePlayer> {
         await _player.pause();
       } else {
         setState(() => _loading = true);
-        if (_player.audioSource == null) await _player.setFilePath(widget.file.path);
+        if (!_loaded) {
+          await _player.setFilePath(widget.file.path);
+          _loaded = true;
+        }
         await _player.play();
       }
     } catch (e) {
