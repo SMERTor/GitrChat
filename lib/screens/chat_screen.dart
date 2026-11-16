@@ -297,7 +297,7 @@ class _ChatScreenState extends State<ChatScreen> {
       if (type == 'video_circle') {
         final info = await VideoCompress.compressVideo(
           file.path,
-          quality: VideoQuality.MediumQuality,
+          quality: VideoQuality.Res640x480Quality,
           deleteOrigin: false,
           includeAudio: true,
         );
@@ -473,35 +473,67 @@ class _ChatScreenState extends State<ChatScreen> {
           ListView.builder(controller: _scroll, padding: const EdgeInsets.fromLTRB(16,16,16,20),
             itemCount: _messages.length, itemBuilder: (context, index) {
               final m = _messages[index]; final mine = m.userId == _myId;
-              return GestureDetector(onLongPress: mine ? () => _delete(m) : null,
-                child: Padding(padding: const EdgeInsets.only(bottom: 10), child: Row(
-                  mainAxisAlignment: mine ? MainAxisAlignment.end : MainAxisAlignment.start,
-                  crossAxisAlignment: CrossAxisAlignment.end, children: [
-                    if (!mine) ...[CircleAvatar(radius: 16, backgroundColor: const Color(0xFF11F3A6).withOpacity(.16), foregroundColor: const Color(0xFF11A879), child: Text(_initials(m.userName), style: const TextStyle(fontWeight: FontWeight.w800))), const SizedBox(width: 7)],
-                    Flexible(child: Container(constraints: const BoxConstraints(maxWidth: 300),
-                      padding: const EdgeInsets.all(10), decoration: BoxDecoration(
-                        gradient: mine ? const LinearGradient(
-                          begin: Alignment.topLeft, end: Alignment.bottomRight,
-                          colors: [Color(0xFF11F3A6), Color(0xFF78FFD2)])
-                          : null,
-                        color: mine ? null : Theme.of(context).colorScheme.surface,
-                        border: mine ? null : Border.all(
-                          color: Theme.of(context).brightness == Brightness.dark
-                            ? Colors.white.withOpacity(.055) : const Color(0xFFE0EEE8)),
-                        boxShadow: mine ? [BoxShadow(
-                          color: const Color(0xFF11F3A6).withOpacity(.13),
-                          blurRadius: 18, offset: const Offset(0, 6))] : null,
-                        borderRadius: BorderRadius.only(topLeft: const Radius.circular(22), topRight: const Radius.circular(22), bottomLeft: Radius.circular(mine ? 22 : 7), bottomRight: Radius.circular(mine ? 7 : 22))),
-                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        if (!mine) Padding(padding: const EdgeInsets.only(bottom: 4), child: Text(m.userName,
-                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Theme.of(context).colorScheme.primary))),
-                        if (m.hasMedia) MediaBubble(message: m, service: _service),
-                        if (m.text.isNotEmpty) Text(m.text, style: TextStyle(color: mine ? const Color(0xFF04251B) : null, fontWeight: mine ? FontWeight.w500 : FontWeight.normal)),
-                        Align(alignment: Alignment.bottomRight, child: Text(_time(m.createdAt),
-                          style: TextStyle(fontSize: 10, color: mine ? const Color(0xFF1D6C51) : Theme.of(context).hintColor))),
-                      ]))),
-                  ],
-                )));
+              final dark = Theme.of(context).brightness == Brightness.dark;
+              final bubbleColor = mine
+                  ? (dark ? const Color(0xFF174D40) : const Color(0xFFDDF8EC))
+                  : (dark ? const Color(0xFF202C35) : Colors.white);
+              final textColor = mine
+                  ? (dark ? const Color(0xFFE8FFF6) : const Color(0xFF123D30))
+                  : Theme.of(context).colorScheme.onSurface;
+              return GestureDetector(
+                onLongPress: mine ? () => _delete(m) : null,
+                child: Padding(
+                  padding: const EdgeInsets.only(bottom: 7),
+                  child: Row(
+                    mainAxisAlignment: mine ? MainAxisAlignment.end : MainAxisAlignment.start,
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      if (!mine) ...[
+                        CircleAvatar(
+                          radius: 14,
+                          backgroundColor: const Color(0xFF11F3A6).withOpacity(.18),
+                          foregroundColor: const Color(0xFF11A879),
+                          child: Text(_initials(m.userName), style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w800)),
+                        ),
+                        const SizedBox(width: 6),
+                      ],
+                      Flexible(
+                        child: Container(
+                          constraints: const BoxConstraints(maxWidth: 310),
+                          padding: EdgeInsets.all(m.hasMedia ? 5 : 10),
+                          decoration: BoxDecoration(
+                            color: bubbleColor,
+                            border: Border.all(color: dark ? Colors.white.withOpacity(.035) : const Color(0xFFE4EEE9)),
+                            boxShadow: [BoxShadow(color: Colors.black.withOpacity(dark ? .08 : .035), blurRadius: 5, offset: const Offset(0, 2))],
+                            borderRadius: BorderRadius.only(
+                              topLeft: const Radius.circular(18), topRight: const Radius.circular(18),
+                              bottomLeft: Radius.circular(mine ? 18 : 5), bottomRight: Radius.circular(mine ? 5 : 18),
+                            ),
+                          ),
+                          child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                            if (!mine) Padding(
+                              padding: const EdgeInsets.fromLTRB(5, 2, 5, 4),
+                              child: Text(m.userName, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: Color(0xFF11A879))),
+                            ),
+                            if (m.hasMedia) MediaBubble(message: m, service: _service),
+                            if (m.text.isNotEmpty) Padding(
+                              padding: EdgeInsets.fromLTRB(m.hasMedia ? 6 : 2, m.hasMedia ? 7 : 0, 6, 2),
+                              child: Text(m.text, style: TextStyle(color: textColor, height: 1.28, fontSize: 15)),
+                            ),
+                            Padding(
+                              padding: EdgeInsets.fromLTRB(m.hasMedia ? 6 : 2, 2, 4, 1),
+                              child: Align(alignment: Alignment.bottomRight, child: Row(mainAxisSize: MainAxisSize.min, children: [
+                                Text(_time(m.createdAt), style: TextStyle(fontSize: 10, color: mine ? (dark ? const Color(0xFFB6E8D5) : const Color(0xFF568A76)) : Theme.of(context).hintColor)),
+                                if (mine) ...[const SizedBox(width: 3), Icon(Icons.done_all_rounded, size: 13, color: dark ? const Color(0xFF8EDFC1) : const Color(0xFF568A76))],
+                              ])),
+                            ),
+                          ]),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
             })),
         if (typing) const Padding(padding: EdgeInsets.fromLTRB(18,0,18,8), child: Align(
           alignment: Alignment.centerLeft, child: Text('Собеседник печатает…', style: TextStyle(fontSize: 12)))),
@@ -1172,17 +1204,40 @@ class _AttachmentTile extends StatelessWidget {
   }
 }
 
-class MediaBubble extends StatelessWidget {
+class MediaBubble extends StatefulWidget {
   const MediaBubble({super.key, required this.message, required this.service});
   final ChatMessage message;
   final ChatService service;
 
   @override
+  State<MediaBubble> createState() => _MediaBubbleState();
+}
+
+class _MediaBubbleState extends State<MediaBubble> {
+  late Future<File> _mediaFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadMedia();
+  }
+
+  @override
+  void didUpdateWidget(covariant MediaBubble oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.message.mediaPath != widget.message.mediaPath) _loadMedia();
+  }
+
+  void _loadMedia() {
+    _mediaFuture = widget.service.cachedMediaFile(widget.message.mediaPath!);
+  }
+
+  @override
   Widget build(BuildContext context) => FutureBuilder<File>(
-    future: service.cachedMediaFile(message.mediaPath!),
+    future: _mediaFuture,
     builder: (context, file) {
-          if (!file.hasData) return TweenAnimationBuilder<double>(tween: Tween(begin: .35, end: .8), duration: const Duration(milliseconds: 850), curve: Curves.easeInOut, builder: (context, opacity, _) => Container(width: 220, height: 132, decoration: BoxDecoration(color: Theme.of(context).colorScheme.surfaceContainerHighest.withOpacity(opacity), borderRadius: BorderRadius.circular(14)), child: const Center(child: Icon(Icons.cloud_download_rounded, size: 30))));
-          if (message.mediaType == 'image') {
+          if (!file.hasData) return TweenAnimationBuilder<double>(tween: Tween(begin: .35, end: .8), duration: const Duration(milliseconds: 850), curve: Curves.easeInOut, builder: (context, opacity, _) => Container(width: 244, height: 154, decoration: BoxDecoration(color: Theme.of(context).colorScheme.surfaceContainerHighest.withOpacity(opacity), borderRadius: BorderRadius.circular(14)), child: const Center(child: Icon(Icons.downloading_rounded, size: 30))));
+          if (widget.message.mediaType == 'image') {
             return GestureDetector(
               onTap: () {
                 Navigator.of(context).push(
@@ -1199,12 +1254,15 @@ class MediaBubble extends StatelessWidget {
                 );
               },
               child: ClipRRect(
-                borderRadius: BorderRadius.circular(12),
-                child: Image.file(file.data!, width: 220, fit: BoxFit.cover),
+                borderRadius: BorderRadius.circular(14),
+                child: Image.file(
+                  file.data!, width: 258, height: 230, fit: BoxFit.cover,
+                  filterQuality: FilterQuality.medium,
+                ),
               ),
             );
           }
-          return VideoCircle(file: file.data!, duration: message.mediaDurationSeconds ?? 0);
+          return VideoCircle(file: file.data!, duration: widget.message.mediaDurationSeconds ?? 0);
     },
   );
 }
@@ -1229,25 +1287,27 @@ class VideoCircle extends StatelessWidget {
         child: Stack(
           alignment: Alignment.center,
           children: [
-            ClipOval(
-              child: SizedBox(
-                width: 190,
-                height: 190,
-                child: VideoPlayerPreview(file: file),
+            Container(
+              width: 194,
+              height: 194,
+              padding: const EdgeInsets.all(3),
+              decoration: const BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: LinearGradient(colors: [Color(0xFF11F3A6), Color(0xFF54B7FF), Color(0xFF11F3A6)]),
+              ),
+              child: ClipOval(
+                child: SizedBox.expand(child: VideoPlayerPreview(file: file)),
               ),
             ),
             Container(
-              width: 54,
-              height: 54,
+              width: 52,
+              height: 52,
               decoration: BoxDecoration(
-                color: Colors.black.withOpacity(.48),
+                color: Colors.black.withOpacity(.52),
                 shape: BoxShape.circle,
+                border: Border.all(color: Colors.white.withOpacity(.65), width: 1.2),
               ),
-              child: const Icon(
-                Icons.play_arrow_rounded,
-                color: Colors.white,
-                size: 38,
-              ),
+              child: const Icon(Icons.play_arrow_rounded, color: Colors.white, size: 36),
             ),
             if (duration > 0)
               Positioned(

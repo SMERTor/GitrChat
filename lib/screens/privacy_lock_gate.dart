@@ -25,6 +25,8 @@ class _PrivacyLockGateState extends State<PrivacyLockGate>
   bool _unlocked = false;
   bool _biometricAvailable = false;
   String? _error;
+  DateTime? _backgroundedAt;
+  static const _relockAfter = Duration(seconds: 30);
 
   String _hash(String value) => sha256.convert(utf8.encode(value)).toString();
 
@@ -95,9 +97,21 @@ class _PrivacyLockGateState extends State<PrivacyLockGate>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.paused ||
-        state == AppLifecycleState.inactive) {
-      if (!_setup && mounted) setState(() => _unlocked = false);
+    // `inactive` is emitted for brief system UI interruptions (permission
+    // prompts, notification shade, biometric UI, focus changes). Locking on
+    // it caused the gate to appear unexpectedly while the user was chatting.
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.hidden) {
+      _backgroundedAt ??= DateTime.now();
+      return;
+    }
+
+    if (state == AppLifecycleState.resumed) {
+      final leftAt = _backgroundedAt;
+      _backgroundedAt = null;
+      if (!_setup && _unlocked && leftAt != null &&
+          DateTime.now().difference(leftAt) >= _relockAfter && mounted) {
+        setState(() => _unlocked = false);
+      }
     }
   }
 
