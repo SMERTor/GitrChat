@@ -23,7 +23,7 @@ class ChatScreen extends StatefulWidget {
   State<ChatScreen> createState() => _ChatScreenState();
 }
 
-class _ChatScreenState extends State<ChatScreen> {
+class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   final _text = TextEditingController();
   final _scroll = ScrollController();
   final _picker = ImagePicker();
@@ -38,7 +38,7 @@ class _ChatScreenState extends State<ChatScreen> {
   StreamSubscription<List<Map<String, dynamic>>>? _messageSub;
   List<ChatMessage> _messages = [];
   final Set<String> _typingUsers = {};
-  int _onlineCount = 1;
+  int _onlineCount = 0;
   final Set<String> _onlineUserIds = {};
   Timer? _lastSeenTimer;
   bool _loading = true, _sending = false;
@@ -48,6 +48,7 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _client = Supabase.instance.client;
     _service = ChatService(_client);
     _myId = _client.auth.currentUser!.id;
@@ -100,8 +101,8 @@ class _ChatScreenState extends State<ChatScreen> {
       _lastSeenTimer = Timer.periodic(const Duration(seconds: 30), (_) {
         _service.updateLastSeen();
       });
-    } catch (_) {
-      if (mounted && _messages.isEmpty) _error('Нет подключения. Локальная история появится после первой синхронизации.');
+    } catch (e) {
+      if (mounted) _error('Не удалось синхронизировать чат: $e');
     } finally {
       if (mounted) setState(() => _loading = false);
       _jumpToBottom();
@@ -474,7 +475,17 @@ class _ChatScreenState extends State<ChatScreen> {
   String _time(DateTime date) => '${date.hour.toString().padLeft(2,'0')}:${date.minute.toString().padLeft(2,'0')}';
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _syncNewMessages();
+      _service.updateLastSeen();
+      _refreshPresenceCount();
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _typingTimer?.cancel(); _lastSeenTimer?.cancel(); _messageSub?.cancel(); _voiceTimer?.cancel();
     _voiceRecorder.dispose();
     final channel = _channel;
