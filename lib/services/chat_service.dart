@@ -28,16 +28,21 @@ class ChatService {
 
   Future<List<ChatMessage>> loadMessages({DateTime? after}) async {
     var query = client.from('messages')
-      .select('id,user_id,body,created_at,media_path,media_type,media_duration_seconds,profiles(name)');
+      .select('id,user_id,body,created_at,media_path,media_type,media_duration_seconds,reply_to_message_id,reply_to_text,reply_to_user_name,profiles(name)');
     if (after != null) query = query.gt('created_at', after.toUtc().toIso8601String());
     final rows = await query.order('created_at', ascending: true).limit(200);
     return rows.map((row) => ChatMessage.fromMap(row)).toList();
   }
 
-  Future<void> sendMessage(String text) async {
+  Future<void> sendMessage(String text, {ChatMessage? replyTo}) async {
     final value = text.trim();
     if (value.isEmpty) return;
-    await client.from('messages').insert({'user_id': userId, 'body': value});
+    await client.from('messages').insert({
+      'user_id': userId, 'body': value,
+      if (replyTo != null) 'reply_to_message_id': int.tryParse(replyTo.id),
+      if (replyTo != null) 'reply_to_text': replyTo.text.isNotEmpty ? replyTo.text : (replyTo.mediaType == 'image' ? 'Фотография' : replyTo.mediaType == 'voice' ? 'Голосовое сообщение' : 'Видеосообщение'),
+      if (replyTo != null) 'reply_to_user_name': replyTo.userName,
+    });
   }
 
   Future<void> sendMedia(File file, String type, {int? durationSeconds}) async {
@@ -45,7 +50,7 @@ class ChatService {
     final path = '$userId/${const Uuid().v4()}.$ext';
     final contentType = switch (ext) {
       'png' => 'image/png', 'webp' => 'image/webp', 'heic' => 'image/heic',
-      'mov' => 'video/quicktime', _ => type == 'image' ? 'image/jpeg' : 'video/mp4',
+      'mov' => 'video/quicktime', 'm4a' => 'audio/m4a', 'aac' => 'audio/aac', 'mp3' => 'audio/mpeg', 'wav' => 'audio/wav', 'ogg' => 'audio/ogg', _ => type == 'image' ? 'image/jpeg' : type == 'voice' ? 'audio/m4a' : 'video/mp4',
     };
     await client.storage.from(bucket).upload(path, file,
       fileOptions: FileOptions(contentType: contentType, upsert: false));
@@ -71,28 +76,36 @@ class ChatService {
     return cache.getSingleFile(url, key: key);
   }
 
+  Future<List<Map<String, dynamic>>> loadReactions(int messageId) async {
+    final rows = await client.from('message_reactions').select('emoji,user_id').eq('message_id', messageId);
+    return List<Map<String, dynamic>>.from(rows);
+  }
+
+  Future<void> toggleReaction(int messageId, String emoji) async {
+    final existing = await client.from('message_reactions').select('id')
+      .eq('message_id', messageId).eq('user_id', userId).eq('emoji', emoji).maybeSingle();
+    if (existing != null) {
+      await client.from('message_reactions').delete().eq('id', existing['id']);
+    } else {
+      await client.from('message_reactions').insert({'message_id': messageId, 'user_id': userId, 'emoji': emoji});
+    }
+  }
+
   Future<void> deleteMessage(ChatMessage message) async {
     if (message.userId != userId) throw Exception('Можно удалять только свои сообщения');
     await client.from('messages').delete().eq('id', message.id);
-    if (message.mediaPath != null) {
-      await client.storage.from(bucket).remove([message.mediaPath!]);
-    }
+    if (message.mediaPath != null) await client.storage.from(bucket).remove([message.mediaPath!]);
   }
 
   Future<int> countOnlineUsers(RealtimeChannel channel) async =>
       channel.presenceState().fold<int>(0, (sum, state) => sum + state.presences.length);
 
   Future<void> updateLastSeen() async {
-    await client.from('profiles').update({
-      'last_seen_at': DateTime.now().toUtc().toIso8601String(),
-    }).eq('id', userId);
+    await client.from('profiles').update({'last_seen_at': DateTime.now().toUtc().toIso8601String()}).eq('id', userId);
   }
 
   Future<List<Map<String, dynamic>>> loadProfiles() async {
-    final rows = await client
-        .from('profiles')
-        .select('id,name,last_seen_at')
-        .order('name');
+    final rows = await client.from('profiles').select('id,name,last_seen_at').order('name');
     return List<Map<String, dynamic>>.from(rows);
   }
 }
