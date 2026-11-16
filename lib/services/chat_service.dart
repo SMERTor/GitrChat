@@ -11,16 +11,6 @@ class ChatService {
   String get userId => client.auth.currentUser!.id;
   static const bucket = 'chat-media';
 
-  Future<void> signInWithName(String rawName) async {
-    final name = rawName.trim();
-    if (name.isEmpty) throw Exception('Введите имя');
-    if (client.auth.currentSession == null) await client.auth.signInAnonymously();
-    await client.from('profiles').upsert({
-      'id': userId, 'name': name,
-      'updated_at': DateTime.now().toUtc().toIso8601String(),
-    });
-  }
-
   Future<String> getMyName() async {
     final row = await client.from('profiles').select('name').eq('id', userId).maybeSingle();
     return row?['name'] as String? ?? 'Пользователь';
