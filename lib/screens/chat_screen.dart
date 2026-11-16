@@ -948,10 +948,13 @@ class _ChatMediaGalleryScreenState extends State<ChatMediaGalleryScreen> {
       ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
 
     for (final message in mediaMessages) {
-      final key = 'gitrchat-media-${message.mediaPath}';
-      final cached = await cache.getFileFromCache(key);
-      if (cached != null && await cached.file.exists()) {
-        found.add(_CachedChatMedia(message: message, file: cached.file));
+      try {
+        final file = await widget.service.cachedMediaFile(message.mediaPath!);
+        if (await file.exists()) {
+          found.add(_CachedChatMedia(message: message, file: file));
+        }
+      } catch (_) {
+        // Keep the rest of the gallery available if one remote file is missing.
       }
     }
 
