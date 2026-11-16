@@ -3,7 +3,7 @@ name: Build GitrChat APK
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, feature/chat-upgrade-upload]
   pull_request:
     branches: [main]
 
