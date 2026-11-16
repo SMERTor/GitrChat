@@ -4,11 +4,13 @@ on:
   workflow_dispatch:
   push:
     branches: [main, feature/chat-upgrade-upload]
-  pull_request:
-    branches: [main]
 
 permissions:
   contents: read
+
+concurrency:
+  group: gitrchat-apk-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
