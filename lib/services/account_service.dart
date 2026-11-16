@@ -7,7 +7,7 @@ class AccountService {
   final SupabaseClient client;
 
   String _emailForName(String name) {
-    final normalized = name.trim().toLowerCase().replaceAll(RegExp(r'\\s+'), ' ');
+    final normalized = name.trim().toLowerCase().replaceAll(RegExp(r'\s+'), ' ');
     final digest = sha256.convert(utf8.encode(normalized)).toString();
     return 'u_${digest.substring(0, 40)}@accounts.gitrchat.invalid';
   }
