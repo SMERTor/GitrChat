@@ -1,7 +1,7 @@
 name: gitrchat
 description: GitrChat — private two-person messaging.
 publish_to: "none"
-version: 1.1.0+2
+version: 1.4.0+5
 
 environment:
   sdk: ">=3.3.0 <4.0.0"
@@ -21,6 +21,8 @@ dependencies:
   local_auth: ^2.3.0
   flutter_secure_storage: ^9.2.2
   crypto: ^3.0.6
+  record: ^6.2.1
+  just_audio: ^0.9.42
 
 dev_dependencies:
   flutter_launcher_icons: ^0.14.3

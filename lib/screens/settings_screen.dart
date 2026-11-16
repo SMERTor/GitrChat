@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../theme_controller.dart';
+import '../services/account_service.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
@@ -10,6 +12,40 @@ class SettingsScreen extends StatelessWidget {
     appThemeMode.value = mode;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('theme_mode', mode.name);
+  }
+
+
+  Future<void> _linkAccount(BuildContext context) async {
+    final name = TextEditingController();
+    final pin = TextEditingController();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Защитить аккаунт'),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          TextField(controller: name, maxLength: 24, decoration: const InputDecoration(labelText: 'Имя аккаунта')),
+          const SizedBox(height: 10),
+          TextField(controller: pin, maxLength: 6, obscureText: true, keyboardType: TextInputType.number,
+            decoration: const InputDecoration(labelText: 'PIN из 6 цифр')),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Отмена')),
+          FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('Сохранить')),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      try {
+        await AccountService(Supabase.instance.client).createOrLink(name.text, pin.text);
+        if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Аккаунт привязан. Теперь его можно восстановить по имени и PIN.')));
+      } catch (e) {
+        if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Не удалось привязать аккаунт: $e')));
+      }
+    }
+    name.dispose();
+    pin.dispose();
   }
 
   @override
@@ -45,6 +81,22 @@ class SettingsScreen extends StatelessWidget {
                 ])),
                 const Icon(Icons.verified_rounded, color: Color(0xFF11F3A6)),
               ]),
+            ),
+            const SizedBox(height: 28),
+            Text('АККАУНТ', style: TextStyle(fontSize: 11, letterSpacing: 1.5, fontWeight: FontWeight.w800, color: muted)),
+            const SizedBox(height: 12),
+            Container(
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.surface,
+                borderRadius: BorderRadius.circular(22),
+                border: Border.all(color: dark ? Colors.white.withOpacity(.06) : const Color(0xFFE0EEE8)),
+              ),
+              child: ListTile(
+                leading: const Icon(Icons.shield_outlined, color: Color(0xFF11B982)),
+                title: const Text('Привязать имя и PIN', style: TextStyle(fontWeight: FontWeight.w700)),
+                subtitle: const Text('Сохранит этот аккаунт и историю для входа на другом телефоне'),
+                onTap: () => _linkAccount(context),
+              ),
             ),
             const SizedBox(height: 28),
             Text('ВНЕШНИЙ ВИД', style: TextStyle(fontSize: 11, letterSpacing: 1.5, fontWeight: FontWeight.w800, color: muted)),
@@ -106,7 +158,7 @@ class SettingsScreen extends StatelessWidget {
                 const Icon(Icons.chat_bubble_rounded, color: Color(0xFF11B982)),
                 const SizedBox(width: 12),
                 const Expanded(child: Text('GitrChat', style: TextStyle(fontWeight: FontWeight.w700))),
-                Text('Версия 1.1.0', style: TextStyle(color: muted, fontSize: 12)),
+                Text('Версия 1.4.0', style: TextStyle(color: muted, fontSize: 12)),
               ]),
             ),
           ],

@@ -4,12 +4,13 @@ import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:flutter/material.dart';
-import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:camera/camera.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:video_player/video_player.dart';
 import 'package:video_compress/video_compress.dart';
+import 'package:record/record.dart';
+import 'package:just_audio/just_audio.dart';
 
 import '../models/chat_message.dart';
 import '../services/chat_service.dart';
@@ -21,18 +22,25 @@ class ChatScreen extends StatefulWidget {
   State<ChatScreen> createState() => _ChatScreenState();
 }
 
-class _ChatScreenState extends State<ChatScreen> {
+class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   final _text = TextEditingController();
   final _scroll = ScrollController();
   final _picker = ImagePicker();
+  final _voiceRecorder = AudioRecorder();
+  Timer? _voiceTimer;
+  bool _recordingVoice = false;
+  int _voiceSeconds = 0;
   late final SupabaseClient _client;
   late final ChatService _service;
   late final String _myId;
   RealtimeChannel? _channel;
   StreamSubscription<List<Map<String, dynamic>>>? _messageSub;
+  StreamSubscription<List<Map<String, dynamic>>>? _reactionSub;
+  ChatMessage? _replyTo;
+  final Map<String, List<Map<String, dynamic>>> _reactions = {};
   List<ChatMessage> _messages = [];
   final Set<String> _typingUsers = {};
-  int _onlineCount = 1;
+  int _onlineCount = 0;
   final Set<String> _onlineUserIds = {};
   Timer? _lastSeenTimer;
   bool _loading = true, _sending = false;
@@ -42,6 +50,7 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _client = Supabase.instance.client;
     _service = ChatService(_client);
     _myId = _client.auth.currentUser!.id;
@@ -88,14 +97,16 @@ class _ChatScreenState extends State<ChatScreen> {
         await _saveLocalMessages();
       }
       _subscribeMessages();
+      _subscribeReactions();
+      _loadReactions();
       _subscribePresence();
       await _service.updateLastSeen();
       _lastSeenTimer?.cancel();
       _lastSeenTimer = Timer.periodic(const Duration(seconds: 30), (_) {
         _service.updateLastSeen();
       });
-    } catch (_) {
-      if (mounted && _messages.isEmpty) _error('Нет подключения. Локальная история появится после первой синхронизации.');
+    } catch (e) {
+      if (mounted) _error('Не удалось синхронизировать чат: $e');
     } finally {
       if (mounted) setState(() => _loading = false);
       _jumpToBottom();
@@ -239,6 +250,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _onTextChanged(String value) {
+    if (mounted) setState(() {});
     final channel = _channel;
     if (channel == null) return;
     if (value.trim().isNotEmpty && !_typingSent) {
@@ -262,7 +274,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final value = _text.text;
     _text.clear();
     setState(() => _sending = true);
-    try { await _service.sendMessage(value); _stopTyping(); }
+    try { await _service.sendMessage(value, replyTo: _replyTo); _stopTyping(); if (mounted) setState(() => _replyTo = null); }
     catch (_) { if (mounted) _error('Не удалось отправить сообщение.'); _text.text = value; }
     finally { if (mounted) setState(() => _sending = false); }
   }
@@ -314,6 +326,52 @@ class _ChatScreenState extends State<ChatScreen> {
         try { await VideoCompress.deleteAllCache(); } catch (_) {}
       }
       if (mounted) setState(() => _sending = false);
+    }
+  }
+
+
+  Future<void> _toggleVoiceRecording() async {
+    if (_sending) return;
+    if (_recordingVoice) {
+      await _finishVoiceRecording();
+      return;
+    }
+    try {
+      if (!await _voiceRecorder.hasPermission()) {
+        _error('Разрешите доступ к микрофону для записи голосовых сообщений.');
+        return;
+      }
+      final path = '\${Directory.systemTemp.path}/gitrchat_voice_\${DateTime.now().microsecondsSinceEpoch}.m4a';
+      await _voiceRecorder.start(
+        const RecordConfig(encoder: AudioEncoder.aacLc, bitRate: 64000, sampleRate: 44100),
+        path: path,
+      );
+      if (!mounted) return;
+      setState(() { _recordingVoice = true; _voiceSeconds = 0; });
+      _voiceTimer?.cancel();
+      _voiceTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+        if (!mounted) { timer.cancel(); return; }
+        setState(() => _voiceSeconds++);
+        if (_voiceSeconds >= 60) _finishVoiceRecording();
+      });
+    } catch (e) {
+      if (mounted) _error('Не удалось начать запись: $e');
+    }
+  }
+
+  Future<void> _finishVoiceRecording() async {
+    if (!_recordingVoice) return;
+    _voiceTimer?.cancel();
+    final duration = _voiceSeconds.clamp(1, 60).toInt();
+    try {
+      final path = await _voiceRecorder.stop();
+      if (mounted) setState(() => _recordingVoice = false);
+      if (path != null) await _upload(File(path), 'voice', duration: duration);
+    } catch (e) {
+      if (mounted) {
+        setState(() => _recordingVoice = false);
+        _error('Не удалось сохранить голосовое сообщение: $e');
+      }
     }
   }
 
@@ -397,6 +455,71 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+
+  void _subscribeReactions() {
+    _reactionSub = _client.from('message_reactions').stream(primaryKey: ['id'])
+      .listen((_) => _loadReactions());
+  }
+
+  Future<void> _loadReactions() async {
+    final loaded = <String, List<Map<String, dynamic>>>{};
+    for (final message in _messages) {
+      final id = int.tryParse(message.id);
+      if (id == null) continue;
+      try {
+        final rows = await _service.loadReactions(id);
+        if (rows.isNotEmpty) loaded[message.id] = rows;
+      } catch (_) {}
+    }
+    if (mounted) setState(() {
+      _reactions
+        ..clear()
+        ..addAll(loaded);
+    });
+  }
+
+  Future<void> _messageActions(ChatMessage message) async {
+    const emojis = ['❤️', '😂', '👍', '🔥', '😮', '😢'];
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      builder: (sheetContext) => SafeArea(child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ListTile(leading: const Icon(Icons.reply_rounded), title: const Text('Ответить'),
+            onTap: () => Navigator.pop(sheetContext, 'reply')),
+          Padding(padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+            child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: emojis.map((emoji) =>
+              InkWell(onTap: () => Navigator.pop(sheetContext, 'react:$emoji'),
+                child: Text(emoji, style: const TextStyle(fontSize: 27)))).toList())),
+          if (message.userId == _myId)
+            ListTile(leading: const Icon(Icons.delete_outline_rounded, color: Colors.red),
+              title: const Text('Удалить сообщение'),
+              onTap: () => Navigator.pop(sheetContext, 'delete')),
+          const SizedBox(height: 8),
+        ],
+      )),
+    );
+    if (!mounted || action == null) return;
+    if (action == 'reply') {
+      setState(() => _replyTo = message);
+      return;
+    }
+    if (action == 'delete') {
+      await _delete(message);
+      return;
+    }
+    if (action.startsWith('react:')) {
+      final id = int.tryParse(message.id);
+      if (id == null) return;
+      try {
+        await _service.toggleReaction(id, action.substring(6));
+        await _loadReactions();
+      } catch (e) {
+        if (mounted) _error('Не удалось поставить реакцию: $e');
+      }
+    }
+  }
+
   Future<void> _delete(ChatMessage message) async {
     if (message.userId != _myId) return;
     final yes = await showDialog<bool>(context: context, builder: (context) => AlertDialog(
@@ -421,8 +544,19 @@ class _ChatScreenState extends State<ChatScreen> {
   String _time(DateTime date) => '${date.hour.toString().padLeft(2,'0')}:${date.minute.toString().padLeft(2,'0')}';
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _syncNewMessages();
+      _service.updateLastSeen();
+      _refreshPresenceCount();
+    }
+  }
+
+  @override
   void dispose() {
-    _typingTimer?.cancel(); _lastSeenTimer?.cancel(); _messageSub?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    _typingTimer?.cancel(); _lastSeenTimer?.cancel(); _messageSub?.cancel(); _reactionSub?.cancel(); _voiceTimer?.cancel();
+    _voiceRecorder.dispose();
     final channel = _channel;
     if (channel != null) _client.removeChannel(channel);
     _text.dispose(); _scroll.dispose(); super.dispose();
@@ -481,7 +615,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   ? (dark ? const Color(0xFFE8FFF6) : const Color(0xFF123D30))
                   : Theme.of(context).colorScheme.onSurface;
               return GestureDetector(
-                onLongPress: mine ? () => _delete(m) : null,
+                onLongPress: () => _messageActions(m),
                 child: Padding(
                   padding: const EdgeInsets.only(bottom: 7),
                   child: Row(
@@ -515,11 +649,44 @@ class _ChatScreenState extends State<ChatScreen> {
                               padding: const EdgeInsets.fromLTRB(5, 2, 5, 4),
                               child: Text(m.userName, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: Color(0xFF11A879))),
                             ),
+                            if (m.replyToText != null)
+                              Container(
+                                width: double.infinity,
+                                margin: const EdgeInsets.fromLTRB(5, 3, 5, 7),
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF11F3A6).withOpacity(.10),
+                                  borderRadius: BorderRadius.circular(9),
+                                ),
+                                child: Text('${m.replyToUserName ?? 'Ответ'}: ${m.replyToText}',
+                                  maxLines: 2, overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(fontSize: 11, color: Color(0xFF11B982))),
+                              ),
                             if (m.hasMedia) MediaBubble(message: m, service: _service),
                             if (m.text.isNotEmpty) Padding(
                               padding: EdgeInsets.fromLTRB(m.hasMedia ? 6 : 2, m.hasMedia ? 7 : 0, 6, 2),
                               child: Text(m.text, style: TextStyle(color: textColor, height: 1.28, fontSize: 15)),
                             ),
+                            if ((_reactions[m.id] ?? []).isNotEmpty)
+                              Padding(
+                                padding: const EdgeInsets.only(left: 5, top: 4),
+                                child: Wrap(spacing: 5, children: (_reactions[m.id]!)
+                                  .fold<Map<String, int>>({}, (map, row) {
+                                    final emoji = row['emoji']?.toString() ?? '';
+                                    map[emoji] = (map[emoji] ?? 0) + 1;
+                                    return map;
+                                  }).entries.map((entry) => GestureDetector(
+                                    onTap: () => _messageActions(m),
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFF11F3A6).withOpacity(.12),
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                      child: Text('${entry.key} ${entry.value}', style: const TextStyle(fontSize: 11)),
+                                    ),
+                                  )).toList()),
+                              ),
                             Padding(
                               padding: EdgeInsets.fromLTRB(m.hasMedia ? 6 : 2, 2, 4, 1),
                               child: Align(alignment: Alignment.bottomRight, child: Row(mainAxisSize: MainAxisSize.min, children: [
@@ -591,6 +758,23 @@ class _ChatScreenState extends State<ChatScreen> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  if (_replyTo != null)
+                    Container(
+                      margin: const EdgeInsets.fromLTRB(14, 8, 14, 2),
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF11F3A6).withOpacity(.10),
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: Row(children: [
+                        const Icon(Icons.reply_rounded, color: Color(0xFF11B982), size: 18),
+                        const SizedBox(width: 8),
+                        Expanded(child: Text('Ответ: ${_replyTo!.userName} · ${_replyTo!.text.isNotEmpty ? _replyTo!.text : 'Медиа'}',
+                          maxLines: 1, overflow: TextOverflow.ellipsis)),
+                        IconButton(onPressed: () => setState(() => _replyTo = null),
+                          icon: const Icon(Icons.close_rounded, size: 18), visualDensity: VisualDensity.compact),
+                      ]),
+                    ),
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
@@ -676,19 +860,14 @@ class _ChatScreenState extends State<ChatScreen> {
                             ],
                           ),
                           child: IconButton(
-                            tooltip: 'Отправить',
-                            onPressed: _sending ? null : _send,
+                            tooltip: _recordingVoice ? 'Остановить запись' : (_text.text.trim().isEmpty ? 'Записать голосовое сообщение' : 'Отправить'),
+                            onPressed: _sending ? null : (_recordingVoice ? _finishVoiceRecording : (_text.text.trim().isEmpty ? _toggleVoiceRecording : _send)),
                             color: const Color(0xFF04251B),
-                            icon: _sending
-                                ? const SizedBox(
-                                    width: 19,
-                                    height: 19,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      color: Color(0xFF04251B),
-                                    ),
-                                  )
-                                : const Icon(Icons.arrow_upward_rounded, size: 25),
+                            icon: _recordingVoice
+                                ? const Icon(Icons.stop_rounded)
+                                : (_text.text.trim().isEmpty
+                                    ? const Icon(Icons.mic_rounded)
+                                    : const Icon(Icons.arrow_upward_rounded, size: 25)),
                           ),
                         ),
                       ),
@@ -760,18 +939,20 @@ class _ChatMediaGalleryScreenState extends State<ChatMediaGalleryScreen> {
 
   Future<void> _loadCachedMedia() async {
     setState(() => _loading = true);
-    final cache = DefaultCacheManager();
     final found = <_CachedChatMedia>[];
     final mediaMessages = widget.messages
-        .where((m) => m.hasMedia && m.mediaPath != null)
+        .where((m) => m.hasMedia && m.mediaPath != null && m.mediaType != 'voice')
         .toList()
       ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
 
     for (final message in mediaMessages) {
-      final key = 'gitrchat-media-${message.mediaPath}';
-      final cached = await cache.getFileFromCache(key);
-      if (cached != null && await cached.file.exists()) {
-        found.add(_CachedChatMedia(message: message, file: cached.file));
+      try {
+        final file = await widget.service.cachedMediaFile(message.mediaPath!);
+        if (await file.exists()) {
+          found.add(_CachedChatMedia(message: message, file: file));
+        }
+      } catch (_) {
+        // Keep the rest of the gallery available if one remote file is missing.
       }
     }
 
@@ -1237,6 +1418,12 @@ class _MediaBubbleState extends State<MediaBubble> {
     future: _mediaFuture,
     builder: (context, file) {
           if (!file.hasData) return TweenAnimationBuilder<double>(tween: Tween(begin: .35, end: .8), duration: const Duration(milliseconds: 850), curve: Curves.easeInOut, builder: (context, opacity, _) => Container(width: 244, height: 154, decoration: BoxDecoration(color: Theme.of(context).colorScheme.surfaceContainerHighest.withOpacity(opacity), borderRadius: BorderRadius.circular(14)), child: const Center(child: Icon(Icons.downloading_rounded, size: 30))));
+          if (widget.message.mediaType == 'voice') {
+            return VoiceMessagePlayer(file: file.data!, duration: widget.message.mediaDurationSeconds ?? 0);
+          }
+          if (widget.message.mediaType == 'voice') {
+            return VoiceMessagePlayer(file: file.data!, duration: widget.message.mediaDurationSeconds ?? 0);
+          }
           if (widget.message.mediaType == 'image') {
             return GestureDetector(
               onTap: () {
@@ -1264,6 +1451,79 @@ class _MediaBubbleState extends State<MediaBubble> {
           }
           return VideoCircle(file: file.data!, duration: widget.message.mediaDurationSeconds ?? 0);
     },
+  );
+}
+
+
+class VoiceMessagePlayer extends StatefulWidget {
+  const VoiceMessagePlayer({super.key, required this.file, required this.duration});
+  final File file;
+  final int duration;
+  @override
+  State<VoiceMessagePlayer> createState() => _VoiceMessagePlayerState();
+}
+
+class _VoiceMessagePlayerState extends State<VoiceMessagePlayer> {
+  late final AudioPlayer _player;
+  bool _loading = false;
+  bool _playing = false;
+  bool _loaded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _player = AudioPlayer();
+    _player.playerStateStream.listen((state) {
+      if (mounted) setState(() => _playing = state.playing);
+    });
+  }
+
+  Future<void> _toggle() async {
+    if (_loading) return;
+    try {
+      if (_playing) {
+        await _player.pause();
+      } else {
+        setState(() => _loading = true);
+        if (!_loaded) {
+          await _player.setFilePath(widget.file.path);
+          _loaded = true;
+        }
+        unawaited(_player.play());
+      }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Не удалось воспроизвести аудио: $e')));
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
+  void dispose() {
+    _player.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    width: 238,
+    child: Row(mainAxisSize: MainAxisSize.min, children: [
+      IconButton(
+        onPressed: _loading ? null : _toggle,
+        icon: _loading
+          ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2))
+          : Icon(_playing ? Icons.pause_circle_filled_rounded : Icons.play_circle_fill_rounded,
+              size: 38, color: const Color(0xFF11B982)),
+      ),
+      const SizedBox(width: 4),
+      const Icon(Icons.graphic_eq_rounded, color: Color(0xFF11B982)),
+      const SizedBox(width: 8),
+      Text('\${widget.duration ~/ 60}:\${(widget.duration % 60).toString().padLeft(2, '0')}',
+        style: const TextStyle(fontWeight: FontWeight.w700)),
+      const Spacer(),
+      const Text('Голосовое', style: TextStyle(fontSize: 11, color: Color(0xFF11B982))),
+    ]),
   );
 }
 
