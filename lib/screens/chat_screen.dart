@@ -729,10 +729,12 @@ class _ChatScreenState extends State<ChatScreen> {
                             ],
                           ),
                           child: IconButton(
-                            tooltip: 'Отправить',
-                            onPressed: _sending ? null : _send,
+                            tooltip: _recordingVoice ? 'Остановить запись' : (_text.text.trim().isEmpty ? 'Записать голосовое сообщение' : 'Отправить'),
+                            onPressed: _sending ? null : (_text.text.trim().isEmpty ? _toggleVoiceRecording : _send),
                             color: const Color(0xFF04251B),
-                            icon: _sending
+                            icon: _recordingVoice
+                                ? const Icon(Icons.stop_rounded)
+                                : (_text.text.trim().isEmpty ? const Icon(Icons.mic_rounded) : (_sending
                                 ? const SizedBox(
                                     width: 19,
                                     height: 19,
@@ -1290,6 +1292,9 @@ class _MediaBubbleState extends State<MediaBubble> {
     future: _mediaFuture,
     builder: (context, file) {
           if (!file.hasData) return TweenAnimationBuilder<double>(tween: Tween(begin: .35, end: .8), duration: const Duration(milliseconds: 850), curve: Curves.easeInOut, builder: (context, opacity, _) => Container(width: 244, height: 154, decoration: BoxDecoration(color: Theme.of(context).colorScheme.surfaceContainerHighest.withOpacity(opacity), borderRadius: BorderRadius.circular(14)), child: const Center(child: Icon(Icons.downloading_rounded, size: 30))));
+          if (widget.message.mediaType == 'voice') {
+            return VoiceMessagePlayer(file: file.data!, duration: widget.message.mediaDurationSeconds ?? 0);
+          }
           if (widget.message.mediaType == 'image') {
             return GestureDetector(
               onTap: () {
