@@ -81,13 +81,18 @@ jobs:
               raise SystemExit(f"Android manifest not found: {manifest}")
 
           content = manifest.read_text()
-          permission = '<uses-permission android:name="android.permission.INTERNET"/>'
-          if permission not in content:
-              marker = "<application"
-              if marker not in content:
-                  raise SystemExit("Could not find <application> in AndroidManifest.xml")
-              content = content.replace(marker, permission + "\n    " + marker, 1)
-              manifest.write_text(content)
+          permissions = [
+              '<uses-permission android:name="android.permission.INTERNET"/>',
+              '<uses-permission android:name="android.permission.CAMERA"/>',
+              '<uses-permission android:name="android.permission.RECORD_AUDIO"/>',
+          ]
+          marker = "<application"
+          if marker not in content:
+              raise SystemExit("Could not find <application> in AndroidManifest.xml")
+          for permission in permissions:
+              if permission not in content:
+                  content = content.replace(marker, permission + "\n    " + marker, 1)
+          manifest.write_text(content)
           PY
 
       - name: Install dependencies
