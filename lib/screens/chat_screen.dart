@@ -245,6 +245,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _onTextChanged(String value) {
+    if (mounted) setState(() {});
     final channel = _channel;
     if (channel == null) return;
     if (value.trim().isNotEmpty && !_typingSent) {
@@ -356,7 +357,7 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _finishVoiceRecording() async {
     if (!_recordingVoice) return;
     _voiceTimer?.cancel();
-    final duration = _voiceSeconds.clamp(1, 60);
+    final duration = _voiceSeconds.clamp(1, 60).toInt();
     try {
       final path = await _voiceRecorder.stop();
       if (mounted) setState(() => _recordingVoice = false);
